@@ -1,0 +1,21 @@
+loss_func: mse_loss
+optim_params:
+  lr: 0.001
+optim_type: sgd
+rnn_params:
+  batch_first: true
+  bias: false
+  hidden_size: 32
+  init_kwargs:
+    init_func: normal_
+    kwargs:
+      mean: 0.0
+      std: 0.17677669529663687
+  input_size: 3
+  learnable_h0: false
+  nonlinearity: relu
+  output_kwargs:
+    activation: softmax
+    type: linear
+  output_size: 3
+rnn_type: rnn
