@@ -7,27 +7,50 @@ import copy
 
 def to_torch_dtype(np_dtype):
     numpy_to_torch_dtype_dict = {
-        np.bool       : torch.bool,
-        np.uint8      : torch.uint8,
-        np.int8       : torch.int8,
-        np.int16      : torch.int16,
-        np.int32      : torch.int32,
-        np.int64      : torch.int64,
-        np.float16    : torch.float16,
-        np.float32    : torch.float32,
-        np.float64    : torch.float64,
-        np.complex64  : torch.complex64,
-        np.complex128 : torch.complex128
+        np.dtype('bool')       : torch.bool,
+        np.dtype('uint8')      : torch.uint8,
+        np.dtype('int8')       : torch.int8,
+        np.dtype('int16')      : torch.int16,
+        np.dtype('int32')      : torch.int32,
+        np.dtype('int64')      : torch.int64,
+        np.dtype('float16')    : torch.float16,
+        np.dtype('float32')    : torch.float32,
+        np.dtype('float64')    : torch.float64,
+        np.dtype('complex64')  : torch.complex64,
+        np.dtype('complex128') : torch.complex128
     }
-    return numpy_to_torch_dtype_dict.get(np_dtype)
+    th_dtype = numpy_to_torch_dtype_dict.get(np.dtype(np_dtype))
+    if th_dtype is None: # TODO: use a logger
+        print(f"WARNING: No matching PyTorch dtype found for dtype {np.dtype(np_dtype)}")
+    return th_dtype
+
+class DiscreteToBoxWrapper(ngym.TrialWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        assert isinstance(env.action_space, gym.spaces.Discrete), \
+            "Should only be used to wrap Discrete envs."
+        self.n = self.action_space.n
+        self.action_space = gym.spaces.Box(0, 1, (self.n,))
+    
+    def new_trial(self, **kwargs):
+        trial = self.env.new_trial(**kwargs)
+        old_gt = self.unwrapped.gt
+        env_gt = np.zeros((self.unwrapped.gt.shape[0], self.n),
+                              dtype=np.float32)
+        env_gt[np.arange(env_gt.shape[0]), old_gt] = 1.
+        self.unwrapped.gt = env_gt
+        return trial
 
 class NeurogymTaskDataset(Dataset):
-    def __init__(self, env, env_kwargs={}, num_trials=400, seq_len=1000, batch_first=False, seed=None):
+    def __init__(self, env, env_kwargs={}, wrappers=[], num_trials=400, seq_len=1000, batch_first=False, seed=None):
         if isinstance(env, gym.Env):
             self.env = copy.deepcopy(env)
         else:
             assert isinstance(env, str), 'env must be gym.Env or str'
             self.env = gym.make(env, **env_kwargs)
+        if len(wrappers) > 0:
+            for wrapper, wrapper_kwargs in wrappers:
+                self.env = wrapper(self.env, **wrapper_kwargs)
         self.env.reset()
         self.env.seed(seed)
 
@@ -93,11 +116,18 @@ class NeurogymDataLoader(DataLoader):
     def __init__(self, dataset, static=False, **kwargs):
         super(NeurogymDataLoader, self).__init__(dataset, **kwargs)
         self.static = static
+        self.frozen = False
     
     def __iter__(self) -> '_BaseDataLoaderIter':
-        if not self.static:
+        if not self.static and not self.frozen:
             self.dataset._build_dataset()
         return super(NeurogymDataLoader, self).__iter__()
+    
+    def freeze(self):
+        self.frozen = True
+    
+    def unfreeze(self):
+        self.frozen = False
 
 # class NeurogymMultiTaskDataset(Dataset):
 #     def __init__(self):

@@ -23,7 +23,10 @@ class RNN(nn.Module):
     r_t = f(h_t)
     y_t = g(W_out @ r_t + b_y)
     """
-    def __init__(self, input_size, hidden_size, output_size, nonlinearity='relu', dt=1, tau=5, 
+    __constants__ = ['input_size', 'hidden_size', 'output_size', 'nonlinearity', 'bias',
+                     'batch_first', 'bidirectional', 'h0']
+
+    def __init__(self, input_size, hidden_size, output_size, nonlinearity='relu', dt=10, tau=50, 
                  bias=True, learnable_h0=True, batch_first=False,
                  init_kwargs={}, noise_kwargs={}, output_kwargs={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
@@ -33,20 +36,19 @@ class RNN(nn.Module):
         self.output_size = output_size
         self.nonlinearity = nonlinearity
         self.batch_first = batch_first
-        self.factory_kwargs = factory_kwargs
         self.init_kwargs = init_kwargs
         self.weight_ih = nn.Parameter(torch.empty((hidden_size, input_size), **factory_kwargs))
         self.weight_hh = nn.Parameter(torch.empty((hidden_size, hidden_size), **factory_kwargs))
         if bias:
             self.bias = nn.Parameter(torch.empty((1, hidden_size), **factory_kwargs))
         else:
-            # self.register_parameter('bias', None)
-            self.bias = nn.Parameter(torch.zeros((1, hidden_size), **factory_kwargs), requires_grad=False)
+            self.register_parameter('bias', None)
+            # self.bias = nn.Parameter(torch.zeros((1, hidden_size), **factory_kwargs), requires_grad=False)
         if learnable_h0:
             self.h0 = nn.Parameter(torch.empty((1, self.hidden_size), **factory_kwargs))
         else:
-            # self.register_parameter('h0', None)
-            self.h0 = nn.Parameter(torch.zeros((1, self.hidden_size), **factory_kwargs), requires_grad=False)
+            self.register_parameter('h0', None)
+            # self.h0 = nn.Parameter(torch.zeros((1, self.hidden_size), **factory_kwargs), requires_grad=False)
         self.set_nonlinearity()
         self.set_decay(dt, tau)
         self.configure_output(**output_kwargs)
@@ -96,25 +98,37 @@ class RNN(nn.Module):
             self.noise_type = kwargs.get('noise_type', 'normal')
             self.noise_params = kwargs.get('noise_params', {})
     
-    def noise(self):
+    def noise(self, device=None, dtype=None):
         if not self.use_noise:
-            return torch.zeros((1, self.hidden_size), **self.factory_kwargs)
+            return 0. # torch.zeros((1, self.hidden_size), **self.factory_kwargs)
         else:
-            out = torch.empty((1, self.hidden_size), **self.factory_kwargs)
+            out = torch.empty((1, self.hidden_size), device=device, dtype=dtype)
             return getattr(torch, self.noise_type)(size=(1, self.hidden_size), out=out, **self.noise_params)
     
     def forward_step(self, input, state):
+        device, dtype = input.device, input.dtype
         h_last, r_last = state
-        h = h_last * (1 - self.alpha) + \
-            self.alpha * (torch.mm(input, self.weight_ih.t()) + torch.mm(r_last, self.weight_hh.t()) + self.bias) + self.noise()
+        if self.bias is None:
+            h = h_last * (1 - self.alpha) + \
+                self.alpha * (torch.mm(input, self.weight_ih.t()) + torch.mm(r_last, self.weight_hh.t())) + self.noise(device, dtype)
+        else:
+            h = h_last * (1 - self.alpha) + \
+                self.alpha * (torch.mm(input, self.weight_ih.t()) + torch.mm(r_last, self.weight_hh.t()) + self.bias) + self.noise(device, dtype)
         r = self.hfn(h)
-        return h, r
+        o = self.readout(r)
+        return o, (h, r)
     
     def forward(self, input, hx=None):
+        device, dtype = input.device, input.dtype
         batch_size, seq_len, input_size = input.shape
         assert (self.input_size == input_size), "Input size mismatch" # TODO: improve error msg
         if hx is None:
-            h = self.h0.expand(batch_size, -1)
+            if self.h0 is None:
+                h = torch.zeros((batch_size, self.hidden_size), device=device, dtype=dtype)
+            else:
+                h = self.h0.expand(batch_size, -1)
+        else:
+            h = hx # why do I do this
         r = self.hfn(h)
         if self.batch_first:
             inputs = input.unbind(1)
@@ -122,14 +136,17 @@ class RNN(nn.Module):
             inputs = input.unbind(0)
         hs = []
         rs = []
+        os = []
         for i in range(len(inputs)):
-            h, r = self.forward_step(inputs[i], (h, r))
+            o, (h, r) = self.forward_step(inputs[i], (h, r))
             hs += [h]
             rs += [r]
+            os += [o]
         hs = torch.stack(hs, dim=(1 if self.batch_first else 0))
         rs = torch.stack(rs, dim=(1 if self.batch_first else 0))
-        outputs = self.readout(rs)
-        return outputs, (hs, rs)
+        os = torch.stack(os, dim=(1 if self.batch_first else 0))
+        # os = self.readout(rs) # need output at each timestep for online learning so
+        return os, (hs, rs)
 
 class jordanRNN:
     """Jordan RNN
