@@ -1,14 +1,14 @@
-from audioop import cross
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import pytorch_lightning as pl
-from .models import RNN
+from .models import rateRNN # RNN
 
 def cross_entropy(input, target):
     """Wrapper for torch F.cross_entropy with input shape handling
     """
+    # import pdb; pdb.set_trace()
     if len(input.shape) > 2: # Batch x Time x ...
         input = input.flatten(start_dim=0, end_dim=-2)
         target = target.flatten(start_dim=0, end_dim=-2)
@@ -38,7 +38,7 @@ class SupervisedRNN(pl.LightningModule):
         rnn_type = self.hparams.get('rnn_type', 'rnn')
         rnn_params = self.hparams.get('rnn_params', {})
         if (rnn_type.lower() in ['rnn', 'vanilla', 'elman']):
-            self.model = RNN(**rnn_params)
+            self.model = rateRNN(**rnn_params)
         else:
             raise ValueError()
     
@@ -57,19 +57,19 @@ class SupervisedRNN(pl.LightningModule):
         }
     
     def forward(self, X, hx=None):
-        outputs, (hs, rs) = self.model(X, hx)
-        return outputs, (hs, rs)
+        outputs, hs = self.model(X, hx)
+        return outputs, hs
     
     def training_step(self, batch, batch_idx):
         inputs, targets = batch
-        outputs, (hs, rs) = self.forward(inputs)
+        outputs, hs = self.forward(inputs)
         loss = self.loss_func(outputs, targets)
         self.log("train/loss", loss)
         return loss
     
     def validation_step(self, batch, batch_idx):
         inputs, targets = batch
-        outputs, (hs, rs) = self.forward(inputs)
+        outputs, hs = self.forward(inputs)
         loss = self.loss_func(outputs, targets)
         self.log("val/loss", loss)
         return loss

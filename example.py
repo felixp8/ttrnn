@@ -21,12 +21,12 @@ model = SupervisedRNN(
     rnn_type='rnn',
     rnn_params=rnn_params,
     optim_type='adam',
-    optim_params={'lr': 1e-3},
+    optim_params={'lr': 1e-4},
     loss_func='cross_entropy',
 )
 
 task = 'PerceptualDecisionMaking-v0'
-env_kwargs = {'dt': 50, 'timing': {}}
+env_kwargs = {'dt': 50, 'timing': {'fixation': 100, 'stimulus': 2000, 'delay': 0, 'decision': 400}}
 wrappers = [] # [(DiscreteToBoxWrapper, {})]
 
 train_dataloader = NeurogymDataLoader(
@@ -45,18 +45,18 @@ val_dataloader = NeurogymDataLoader(
 
 loggers = [
     # pl.loggers.CSVLogger(save_dir="csv_logs"),
-    pl.loggers.WandbLogger(project='ttrnn-dev'),
+    # pl.loggers.WandbLogger(project='ttrnn-dev'),
 ]
 callbacks = [
-    SuccessRate(log_every_n_epochs=2, include_abort=True, threshold=0.5),
-    TrajectoryPlot(log_every_n_epochs=2),
-    TaskPlot(log_every_n_epochs=2),
+    # SuccessRate(log_every_n_epochs=2, include_abort=True, threshold=0.5),
+    # TrajectoryPlot(log_every_n_epochs=2),
+    # TaskPlot(log_every_n_epochs=2),
 ]
 
 trainer = pl.Trainer(
     max_epochs=100,
     callbacks=callbacks,
-    gpus=1,
+    gpus=0,
     num_nodes=1,
     log_every_n_steps=1,
     enable_progress_bar=True,
@@ -66,3 +66,5 @@ trainer = pl.Trainer(
 )
 
 trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
+
+# import pdb; pdb.set_trace()

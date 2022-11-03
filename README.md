@@ -10,6 +10,7 @@ PyTorch package for task-trained RNNs
 * euRNN (Jing et al. 2017)
 * Excitatory-Inhibitory / Dale's law (Song et al. 2016)
 * Locality-masked RNNs (Khona et al. 2022)
+* Low-rank RNNs (Mastrogiuseppe)
 * Multi-area RNNs (hierarchical and parallel)
 * Spiking neural networks?
 * Reservoir models?

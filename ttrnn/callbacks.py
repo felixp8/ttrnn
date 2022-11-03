@@ -115,7 +115,7 @@ class TrajectoryPlot(pl.Callback):
             inputs, target = batch
             inputs = inputs.to(pl_module.device)
             # Perform the forward pass through the model
-            outputs, (hs, rs) = pl_module(inputs)
+            outputs, hs = pl_module(inputs)
             states.append(hs)
         states = torch.cat(states).detach().cpu().numpy()
         # Reduce dimensionality if necessary
@@ -196,7 +196,7 @@ class TaskPlot(pl.Callback):
             inputs, target = next(iterator)
             inputs = inputs.to(pl_module.device)
             # Perform the forward pass through the model
-            outputs, (hs, rs) = pl_module(inputs)
+            outputs, hs = pl_module(inputs)
             samples.append((inputs, target, outputs))
             tot_samples += outputs.shape[0]
         inputs, target, outputs = zip(*samples)
@@ -288,7 +288,7 @@ class SuccessRate(pl.Callback):
             inputs, target = batch
             inputs = inputs.to(pl_module.device)
             # Perform the forward pass through the model
-            outputs, (hs, rs) = pl_module(inputs)
+            outputs, hs = pl_module(inputs)
             model_outputs.append(outputs)
             task_targets.append(target)
         model_outputs = torch.cat(model_outputs).detach().cpu().numpy()
