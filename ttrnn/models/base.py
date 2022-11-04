@@ -13,14 +13,14 @@ class RNNBase(nn.Module):
     """Base RNN class"""
     __constants__ = ['input_size', 'hidden_size', 'output_size', 'batch_first']
     
-    def __init__(self, rnn_cell, readout, input_size, hidden_size, output_size, batch_first=True):
+    def __init__(self, rnn_cell, input_size, hidden_size, output_size, batch_first=True, output_kwargs={}):
         super(RNNBase, self).__init__()
         self.rnn_cell = rnn_cell
-        self.readout = readout
         self.batch_first = batch_first
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
+        self._configure_output(**output_kwargs)
 
     def reset_parameters(self):
         """Set model weights"""
@@ -33,6 +33,22 @@ class RNNBase(nn.Module):
                 for layer in self.readout:
                     if hasattr(layer, 'reset_parameters'):
                         layer.reset_parameters()
+
+    def _configure_output(self, **kwargs): # need to improve this
+        if kwargs.get('type', 'linear') == 'linear':
+            readout = nn.Linear(self.hidden_size, self.output_size, **kwargs.get('params', {}))
+        else:
+            readout = getattr(nn, kwargs.get('type'))(kwargs.get('params'))
+        if kwargs.get('activation', 'none') == 'none':
+            activation = nn.Identity()
+        elif kwargs.get('activation', 'none') == 'softmax':
+            activation = nn.Softmax(dim=-1)
+        else:
+            raise ValueError
+        self.readout = nn.Sequential(
+            readout,
+            activation
+        )
     
     def build_initial_state(self, batch_size, device=None, dtype=None):
         """Return initial states. Override in sub-classes"""

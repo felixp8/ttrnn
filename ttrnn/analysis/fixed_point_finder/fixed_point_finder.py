@@ -1,3 +1,9 @@
+'''
+fixed_point_finder.py
+Adapted from: https://github.com/mattgolub/fixed-point-finder/blob/master/FixedPointFinder.py
+Original author: Matt Golub, October 2018.
+Please direct correspondence to mgolub@stanford.edu.
+'''
 import numpy as np
 import torch
 import time
@@ -9,10 +15,12 @@ from .adaptive_grad_norm_clip import AdaptiveGradNormClip
 # from .timer import Timer
 
 def to_torch(*args, device=None):
-    def arr_to_torch(arr, device=None):
+    def arr_to_torch(arr):
         if isinstance(arr, np.ndarray):
             return torch.from_numpy(arr).to(device)
         elif isinstance(arr, torch.Tensor):
+            if device is None:
+                device = arr.device
             return arr.to(device)
         elif isinstance(arr, (tuple, list)):
             return (arr_to_torch(a) for a in arr)
@@ -338,14 +346,10 @@ class FixedPointFinder:
         if self.do_compute_jacobians:
             if unique_fps.n > 0:
 
-                self._print_if_verbose(f'\tComputing recurrent Jacobian at {unique_fps.n} '
+                self._print_if_verbose(f'\tComputing input and recurrent Jacobians at {unique_fps.n} '
                     'unique fixed points.')
-                dFdx, dFdx_tf = self._compute_recurrent_jacobians(unique_fps)
+                dFdu, dFdx = self._compute_jacobians(unique_fps)
                 unique_fps.J_xstar = dFdx
-
-                self._print_if_verbose(f'\tComputing input Jacobian at {unique_fps.n} '
-                    'unique fixed points.')
-                dFdu, dFdu_tf = self._compute_input_jacobians(unique_fps)
                 unique_fps.dFdu = dFdu
 
             else:
@@ -435,7 +439,7 @@ class FixedPointFinder:
             if cond_ids is None:
                 colors_i = None
             else:
-                colors_i = cond_ids[index]
+                colors_i = cond_ids[init_idx:(init_idx+1)]
 
             if is_fresh_start:
                 self._print_if_verbose(f'\n\tInitialization {init_idx+1} of {n_inits}:')
@@ -655,10 +659,46 @@ class FixedPointFinder:
         if noise_scale == 0.0:
             return data # no noise to add
         if noise_scale > 0.0:
-            return data + to_torch(noise_scale * self.rng.randn(*data.shape), device=self.device)
+            return data + noise_scale * self.rng.randn(*data.shape)
         elif noise_scale < 0.0:
             raise ValueError('noise_scale must be non-negative,'
                              ' but was %f' % noise_scale)
+
+    @staticmethod
+    def identify_q_outliers(fps, q_thresh):
+        '''Identify fixed points with optimized q values that exceed a
+        specified threshold.
+        Args:
+            fps: A FixedPoints object containing optimized fixed points and
+            associated metadata.
+            q_thresh: A scalar float indicating the threshold on fixed
+            points' q values.
+        Returns:
+            A numpy array containing the indices into fps corresponding to
+            the fixed points with q values exceeding the threshold.
+        Usage:
+            idx = identify_q_outliers(fps, q_thresh)
+            outlier_fps = fps[idx]
+        '''
+        return np.where(fps.qstar > q_thresh)[0]
+
+    @staticmethod
+    def identify_q_non_outliers(fps, q_thresh):
+        '''Identify fixed points with optimized q values that do not exceed a
+        specified threshold.
+        Args:
+            fps: A FixedPoints object containing optimized fixed points and
+            associated metadata.
+            q_thresh: A scalar float indicating the threshold on fixed points'
+            q values.
+        Returns:
+            A numpy array containing the indices into fps corresponding to the
+            fixed points with q values that do not exceed the threshold.
+        Usage:
+            idx = identify_q_non_outliers(fps, q_thresh)
+            non_outlier_fps = fps[idx]
+        '''
+        return np.where(fps.qstar <= q_thresh)[0]
     
     @staticmethod
     def identify_distance_non_outliers(fps, initial_states, dist_thresh):
@@ -735,3 +775,101 @@ class FixedPointFinder:
     def _print_if_verbose(self, *args, **kwargs):
         if self.verbose:
             print(*args, **kwargs)
+
+
+    def _run_additional_iterations_on_outliers(self, fps):
+        '''Detects outlier states with respect to the q function and runs
+        additional optimization iterations on those states This should only be
+        used after calling either _run_joint_optimization or
+        _run_sequential_optimizations.
+        Args:
+            A FixedPoints object containing (partially) optimized fixed points
+            and associated metadata.
+        Returns:
+            A FixedPoints object containing the further-optimized fixed points
+            and associated metadata.
+        '''
+
+        '''
+        Known issue:
+            Additional iterations do not always reduce q! This may have to do
+            with learning rate schedules restarting from values that are too
+            large.
+        '''
+
+        def perform_outlier_optimization(fps, method):
+
+            idx_outliers = self.identify_q_outliers(fps, outlier_min_q)
+            n_outliers = len(idx_outliers)
+
+            outlier_fps = fps[idx_outliers]
+            n_prev_iters = outlier_fps.n_iters
+            initial_states, inputs = self._build_state_vars(outlier_fps.xstar, outlier_fps.inputs)
+            cond_ids = outlier_fps.cond_id
+
+            if method == 'joint':
+
+                self._print_if_verbose('\tPerforming another round of '
+                                       'joint optimization, '
+                                       'over outlier states only.')
+
+                updated_outlier_fps = self._run_joint_optimization(
+                    initial_states, inputs,
+                    cond_ids=cond_ids)
+
+            elif method == 'sequential':
+
+                self._print_if_verbose('\tPerforming a round of sequential '
+                                       'optimizations, over outlier '
+                                       'states only.')
+
+                updated_outlier_fps = self._run_sequential_optimizations(
+                    initial_states, inputs,
+                    cond_ids=cond_ids,
+                    q_prior=outlier_fps.qstar)
+
+            else:
+                raise ValueError(f'Unsupported method: {method}.')
+
+            updated_outlier_fps.n_iters += n_prev_iters
+            fps[idx_outliers] = updated_outlier_fps
+
+            return fps
+
+        def outlier_update(fps):
+
+            idx_outliers = self.identify_q_outliers(fps, outlier_min_q)
+            n_outliers = len(idx_outliers)
+
+            self._print_if_verbose(f'\n\tDetected {n_outliers} putative outliers '
+                                   f'(q>{outlier_min_q:.2e}).')
+
+            return idx_outliers
+
+        outlier_min_q = np.median(fps.qstar)*self.outlier_q_scale
+        idx_outliers = outlier_update(fps)
+
+        if len(idx_outliers) == 0:
+            return fps
+
+        '''
+        Experimental: Additional rounds of joint optimization. This code
+        currently runs, but does not appear to be very helpful in eliminating
+        outliers.
+        '''
+        if self.method == 'joint':
+            N_ROUNDS = 0 # consider making this a hyperparameter
+            for round in range(N_ROUNDS):
+
+                fps = perform_outlier_optimization(fps, 'joint')
+
+                idx_outliers = outlier_update(fps)
+                if len(idx_outliers) == 0:
+                    return fps
+
+        # Always perform a round of sequential optimizations on any (remaining)
+        # "outliers".
+        fps = perform_outlier_optimization(fps, 'sequential')
+        outlier_update(fps) # For print output only
+
+        return fps

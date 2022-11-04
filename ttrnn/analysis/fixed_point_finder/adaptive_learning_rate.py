@@ -1,9 +1,9 @@
-'''
+"""
 adaptive_learning_rate.py
 Adapted from: https://github.com/mattgolub/recurrent-whisperer/blob/master/AdaptiveLearningRate.py
 Original author: Matt Golub, August 2018.
 Please direct correspondence to mgolub@stanford.edu.
-'''
+"""
 import numpy as np
 import torch
 import torch.nn as nn

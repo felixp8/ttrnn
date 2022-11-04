@@ -1,9 +1,9 @@
-'''
-AdaptiveGradNormClip.py
-Written for Python 3.6.9
-@ Matt Golub, August 2018.
+"""
+adaptive_grad_norm_clip.py
+Adapted from: https://github.com/mattgolub/recurrent-whisperer/blob/master/AdaptiveGradNormClip.py
+Original author: Matt Golub, August 2018.
 Please direct correspondence to mgolub@stanford.edu.
-'''
+"""
 import numpy as np
 import torch
 import os
