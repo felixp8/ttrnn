@@ -78,12 +78,12 @@ class AdaptiveGradNormClip(object):
             None.
         '''
         if self.do_adaptive_clipping:
-            if self.step < self.sliding_window_len:
+            if self.curr_step < self.sliding_window_len:
                 # First fill up an entire "window" of values
                 self.grad_norm_log.append(grad_norm)
             else:
                 # Once the window is full, overwrite the oldest value
-                idx = np.mod(self.step, self.sliding_window_len)
+                idx = np.mod(self.curr_step, self.sliding_window_len)
                 self.grad_norm_log[idx] = grad_norm
 
             proposed_clip_val = \

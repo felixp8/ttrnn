@@ -84,9 +84,9 @@ class AdaptiveLearningRate(object):
         self.last_epoch = 0
         self.warmup_rates = self._get_warmup_rates()
         if n_warmup_steps > 0:
-            self._set_lr(self.warmup_rates[0])
+            self._set_lr(self.warmup_rates[0], epoch=0)
         else:
-            self._set_lr(lr_init)
+            self._set_lr(lr_init, epoch=0)
 
     def step(self, metrics, epoch=None):
         # convert `metrics` to float, in case it's a zero-dim Tensor
@@ -109,10 +109,10 @@ class AdaptiveLearningRate(object):
             self.step_last_update = self.last_epoch
 
         elif self._conditional_decrease_rate():
-            self._decrease_lr()
+            self._decrease_lr(epoch)
             self.step_last_update = self.last_epoch
         elif self._conditional_increase_rate():
-            self._increase_lr()
+            self._increase_lr(epoch)
             self.step_last_update = self.last_epoch
 
         self._last_lr = [group['lr'] for group in self.optimizer.param_groups]
@@ -131,25 +131,23 @@ class AdaptiveLearningRate(object):
         for i, param_group in enumerate(self.optimizer.param_groups):
             old_lr = float(param_group['lr'])
             new_lr = max(old_lr * self.decrease_factor, self.min_lrs[i])
-            if old_lr - new_lr > self.eps:
-                param_group['lr'] = new_lr
-                if self.verbose:
-                    epoch_str = ("%.2f" if isinstance(epoch, float) else
-                                    "%.5d") % epoch
-                    print('Epoch {}: reducing learning rate'
-                            ' of group {} to {:.4e}.'.format(epoch_str, i, new_lr))
+            param_group['lr'] = new_lr
+            if self.verbose:
+                epoch_str = ("%.2f" if isinstance(epoch, float) else
+                                "%.5d") % epoch
+                print('Epoch {}: reducing learning rate'
+                        ' of group {} to {:.4e}.'.format(epoch_str, i, new_lr))
 
     def _increase_lr(self, epoch):
         for i, param_group in enumerate(self.optimizer.param_groups):
             old_lr = float(param_group['lr'])
             new_lr = max(old_lr * self.increase_factor, self.min_lrs[i])
-            if old_lr - new_lr > self.eps:
-                param_group['lr'] = new_lr
-                if self.verbose:
-                    epoch_str = ("%.2f" if isinstance(epoch, float) else
-                                    "%.5d") % epoch
-                    print('Epoch {}: increasing learning rate'
-                            ' of group {} to {:.4e}.'.format(epoch_str, i, new_lr))
+            param_group['lr'] = new_lr
+            if self.verbose:
+                epoch_str = ("%.2f" if isinstance(epoch, float) else
+                                "%.5d") % epoch
+                print('Epoch {}: increasing learning rate'
+                        ' of group {} to {:.4e}.'.format(epoch_str, i, new_lr))
 
     def _conditional_decrease_rate(self):
         '''Decreases the learning rate if the most recent loss is worse than

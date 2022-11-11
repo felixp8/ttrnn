@@ -15,7 +15,7 @@ from .adaptive_grad_norm_clip import AdaptiveGradNormClip
 # from .timer import Timer
 
 def to_torch(*args, device=None):
-    def arr_to_torch(arr):
+    def arr_to_torch(arr, device):
         if isinstance(arr, np.ndarray):
             return torch.from_numpy(arr).to(device)
         elif isinstance(arr, torch.Tensor):
@@ -23,10 +23,10 @@ def to_torch(*args, device=None):
                 device = arr.device
             return arr.to(device)
         elif isinstance(arr, (tuple, list)):
-            return (arr_to_torch(a) for a in arr)
+            return (arr_to_torch(a, device) for a in arr)
         else:
             raise AssertionError(f"Cannot handle type {type(arr)}")
-    return (arr_to_torch(arr) for arr in args)
+    return (arr_to_torch(arr, device) for arr in args)
 
 def to_numpy(*args):
     def arr_to_numpy(arr):
@@ -135,7 +135,7 @@ class FixedPointFinder:
             post_split = True
         else:
             state_traj_bxtxd = state_traj
-            post_split = True
+            post_split = False
 
         [n_batch, n_time, n_states] = state_traj_bxtxd.shape
         n_inputs = inputs.shape[2]
@@ -194,14 +194,14 @@ class FixedPointFinder:
         Raises:
             ValueError if noise_scale is negative.
         '''
-        state_traj = to_torch(state_traj, device=self.device)
+        state_traj, = to_torch(state_traj, device=self.device)
         if isinstance(state_traj, (tuple, list)):
             splits = [arr.shape[1] for arr in state_traj]
             state_traj_bxtxd = torch.cat(state_traj, dim=1)
             post_split = True
         else:
             state_traj_bxtxd = state_traj
-            post_split = True
+            post_split = False
 
         [n_batch, n_time, n_states] = state_traj_bxtxd.shape
 
@@ -227,6 +227,25 @@ class FixedPointFinder:
             return state_samples
         else:
             return state_samples
+
+    def _sample_trial_and_time_indices(self, valid_bxt, n):
+        ''' Generate n random indices corresponding to True entries in
+        valid_bxt. Sampling is performed without replacement.
+        Args:
+            valid_bxt: [n_batch x n_time] bool numpy array.
+            n: integer specifying the number of samples to draw.
+        returns:
+            (trial_indices, time_indices): tuple containing random indices
+            into valid_bxt such that valid_bxt[i, j] is True for every
+            (i=trial_indices[k], j=time_indices[k])
+        '''
+
+        (trial_idx, time_idx) = torch.nonzero(valid_bxt, as_tuple=True)
+        max_sample_index = len(trial_idx) # same as len(time_idx)
+        sample_indices = self.rng.randint(max_sample_index, size=n).astype(int)
+        sample_indices = torch.from_numpy(sample_indices).to(self.device)
+
+        return trial_idx[sample_indices], time_idx[sample_indices]
 
     def find_candidate_fps(self, state_traj, fp_tol=1e-6, fp_min_t=4):
         tlen = state_traj.shape[1]
@@ -392,7 +411,7 @@ class FixedPointFinder:
 
                 self._print_if_verbose(f'\tComputing input and recurrent Jacobians at {unique_fps.n} '
                     'unique fixed points.')
-                dFdu, dFdx = self._compute_jacobians(unique_fps)
+                dFdx, dFdu = self._compute_jacobians(unique_fps)
                 unique_fps.J_xstar = dFdx
                 unique_fps.dFdu = dFdu
 
@@ -583,7 +602,7 @@ class FixedPointFinder:
         while True:
             x_in = self._split_state(x)
             F = self.rnn_cell(u, x_in)
-            F = self._build_state(F)
+            F = self._concat_state(F)
 
             q = 0.5 * torch.sum(torch.square(F - x), axis=1)
             dq = torch.abs(q - q_prev)
@@ -661,8 +680,8 @@ class FixedPointFinder:
 
         return J_rec, J_inp
 
-    @staticmethod
-    def _get_valid_mask(n_batch, n_time, valid_bxt=None):
+    # @staticmethod
+    def _get_valid_mask(self, n_batch, n_time, valid_bxt=None):
         ''' Returns an appropriately sized boolean mask.
         Args:
             (n_batch, n_time) is the shape of the desired mask.
@@ -673,16 +692,16 @@ class FixedPointFinder:
             AssertionError if valid_bxt does not have shape (n_batch, n_time)
         '''
         if valid_bxt is None:
-            valid_bxt = np.ones((n_batch, n_time), dtype=bool)
+            valid_bxt = torch.ones((n_batch, n_time)).to(torch.bool).to(self.device)
         else:
             assert (valid_bxt.shape[0] == n_batch and
                 valid_bxt.shape[1] == n_time),\
                 (f'valid_bxt.shape should be {(n_batch, n_time)}, but is {valid_bxt.shape}')
 
-            if isinstance(valid_bxt, torch.Tensor) and (valid_bxt.dtype != torch.bool):
+            if isinstance(valid_bxt, np.ndarray):
+                valid_bxt, = to_torch(valid_bxt, device=self.device)
+            if (valid_bxt.dtype != torch.bool):
                 valid_bxt = valid_bxt.to(bool)
-            elif isinstance(valid_bxt, np.ndarray) and (valid_bxt.dtype != np.bool):
-                valid_bxt = valid_bxt.astype(bool)
 
         return valid_bxt
 
@@ -772,7 +791,7 @@ class FixedPointFinder:
             non-outlier fixed points.
         '''
 
-        initial_states, inputs = to_numpy(initial_states, inputs)
+        initial_states, = to_numpy(initial_states)
 
         if isinstance(initial_states, (tuple, list)):
             initial_states = np.concatenate(initial_states, axis=1)

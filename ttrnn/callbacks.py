@@ -307,9 +307,9 @@ class TaskPerformance(pl.Callback):
                 success_rate, mean_reward = self._cross_entropy_success_rate(model_outputs, task_targets, dataloader.dataset)
         else:
             return
-        pl_module.log(f"{self.split}/success_rate", success_rate)
-        pl_module.log(f"{self.split}/mean_reward", mean_reward)
-        print(success_rate)
+        # pl_module.log(f"{self.split}/success_rate", success_rate)
+        # pl_module.log(f"{self.split}/mean_reward", mean_reward)
+        print(success_rate, mean_reward)
         
     def _mse_loss_success_rate(self, model_outputs, task_targets, dataset):
         """Needs cleanup.
@@ -338,13 +338,16 @@ class TaskPerformance(pl.Callback):
         for idx in range(model_outputs.shape[0]):
             env_list = dataset.stored_envs[idx]
             output = model_outputs[idx]
-            # target = task_targets[idx]
+            target = task_targets[idx]
             start_t = 0
             for env in env_list:
                 tlen = env.unwrapped.gt.shape[0]
                 if (start_t + tlen > output.shape[0]): # incomplete trial
                     continue
+                if hasattr(env, 'set_threshold'):
+                    env.set_threshold(self.threshold)
                 trial_output = output[start_t:(start_t + tlen)]
+                trial_target = target[start_t:(start_t + tlen)]
                 # actions, valid = get_actions(trial_output, env)
                 actions = trial_output
                 valid = True
@@ -365,8 +368,6 @@ class TaskPerformance(pl.Callback):
                 performance = info['performance']
                 success.append(performance)
                 rewards.append(reward)
-                if reward == -0.1:
-                    import pdb; pdb.set_trace()
                 start_t += tlen
         success = np.array(success)
         rewards = np.array(rewards)
@@ -400,6 +401,8 @@ class TaskPerformance(pl.Callback):
                 tlen = env.unwrapped.gt.shape[0]
                 if (start_t + tlen > output.shape[0]): # incomplete trial
                     continue
+                if hasattr(env, 'set_threshold'):
+                    env.set_threshold(self.threshold)
                 trial_output = output[start_t:(start_t + tlen)]
                 actions = get_actions(trial_output, env)
                 # if not valid:

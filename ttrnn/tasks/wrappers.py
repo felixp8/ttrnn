@@ -4,12 +4,16 @@ import gym
 import neurogym as ngym
 
 class DiscreteToBoxWrapper(ngym.TrialWrapper):
-    def __init__(self, env):
+    def __init__(self, env, threshold=0.0):
         super().__init__(env)
         assert isinstance(env.action_space, gym.spaces.Discrete), \
             "Should only be used to wrap Discrete envs."
         self.n = self.action_space.n
         self.action_space = gym.spaces.Box(0, 1, (self.n,))
+        self.threshold = threshold
+    
+    def set_threshold(self, threshold):
+        self.threshold = threshold
     
     def new_trial(self, **kwargs):
         trial = self.env.new_trial(**kwargs)
@@ -23,21 +27,27 @@ class DiscreteToBoxWrapper(ngym.TrialWrapper):
     def step(self, action):
         if isinstance(action, np.ndarray):
             action = np.argmax(action)
+            if action != 0 and np.max(action[1:]) < self.threshold:
+                action = 0
         return self.env.step(action)
 
 class RingToBoxWrapper(ngym.TrialWrapper):
-    def __init__(self, env):
+    def __init__(self, env, threshold=0.0):
         super().__init__(env)
         assert hasattr(env.unwrapped, 'theta')
         if hasattr(env.unwrapped, 'delaycomparison'):
             assert env.unwrapped.delaycomparison
         self.dim_ring = len(self.theta)
+        self.threshold = threshold
         self._get_obs_shapes()
         self._get_act_shapes()
         self.observation_space = gym.spaces.Box(
             -np.inf, np.inf, (self.obs_dim,)) # TODO: use ngym spaces, add names
         self.action_space = gym.spaces.Box(
             -np.inf, np.inf, (self.act_dim,))
+    
+    def set_threshold(self, threshold):
+        self.threshold = threshold
     
     def _get_obs_shapes(self):
         assert isinstance(self.env.observation_space, gym.spaces.Box)
@@ -200,9 +210,9 @@ class RingToBoxWrapper(ngym.TrialWrapper):
                 assert self.act_dim == 3 # don't know how to handle anything else rn
                 theta = np.arctan2(action[2], action[1])
                 mag = np.sqrt(action[1] ** 2 + action[2] ** 2)
-                if mag > action[0]: # fixation broken
+                if mag > action[0] and mag >= self.threshold: # fixation broken
                     dists = np.concatenate([theta - self.unwrapped.theta, theta + 2 * np.pi - self.unwrapped.theta])
-                    match_idx = (np.argmin(dists) % self.dim_ring) + 1
+                    match_idx = (np.argmin(np.abs(dists)) % self.dim_ring) + 1
                 else:
                     match_idx = 0
             else:

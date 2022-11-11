@@ -16,7 +16,7 @@ import pdb
 import numpy as np
 import pickle
 
-from .timer import Timer
+# from .timer import Timer
 
 class FixedPoints(object):
     '''
