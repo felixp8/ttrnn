@@ -2,43 +2,48 @@ import torch
 import pytorch_lightning as pl
 # import neurogym as ngym
 from ttrnn.trainer import SupervisedRNN
-from ttrnn.dataset import NeurogymTaskDataset, NeurogymDataLoader, DiscreteToBoxWrapper
-from ttrnn.callbacks import SuccessRate, TrajectoryPlot, TaskPlot
+from ttrnn.dataset import NeurogymTaskDataset, NeurogymDataLoader
+from ttrnn.tasks.driscoll2022 import Driscoll2022
+from ttrnn.tasks.wrappers import DiscreteToBoxWrapper, RingToBoxWrapper
+from ttrnn.callbacks import TaskPerformance, TrajectoryPlot, TaskPlot
 
 rnn_params = {
-    'input_size': 3, 
-    'hidden_size': 32, 
+    'input_size': 20, 
+    'hidden_size': 64, 
     'output_size': 3, 
     'nonlinearity': 'relu',
     'bias': False, 
     'learnable_h0': False,
     'batch_first': True,
-    'init_kwargs': {'init_func': 'normal_', 'kwargs': {'mean': 0.0, 'std': 1 / (32 ** 0.5)}},
-    'output_kwargs': {'type': 'linear', 'activation': 'softmax'},
+    'init_kwargs': {'init_func': 'normal_', 'kwargs': {'mean': 0.0, 'std': 1 / (64 ** 0.5)}},
+    'output_kwargs': {'type': 'linear', 'activation': 'none'},
 }
 
 model = SupervisedRNN(
-    rnn_type='rnn',
+    rnn_type='rateRNN',
     rnn_params=rnn_params,
-    optim_type='adam',
+    optim_type='Adam',
     optim_params={'lr': 1e-4},
-    loss_func='cross_entropy',
+    loss_func='mse_loss',
 )
 
-task = 'PerceptualDecisionMaking-v0'
-env_kwargs = {'dt': 50, 'timing': {'fixation': 100, 'stimulus': 2000, 'delay': 0, 'decision': 400}}
-wrappers = [] # [(DiscreteToBoxWrapper, {})]
+# import pdb; pdb.set_trace()
+
+# task = 'PerceptualDecisionMaking-v0'
+task = Driscoll2022()
+env_kwargs = {} # {'dt': 24} # , 'timing': {'fixation': 100, 'stimulus': 2000, 'delay': 0, 'decision': 400}}
+wrappers = [] # [(RingToBoxWrapper, {})] # [(DiscreteToBoxWrapper, {})]
 
 train_dataloader = NeurogymDataLoader(
-    NeurogymTaskDataset(task, env_kwargs, wrappers=wrappers, num_trials=100, seq_len=50, batch_first=True), 
+    NeurogymTaskDataset(task, env_kwargs, wrappers=wrappers, num_trials=100, seq_len=200, batch_first=True, save_envs=False), 
     static=False,
     batch_size=1, 
     shuffle=True, 
 )
 
 val_dataloader = NeurogymDataLoader(
-    NeurogymTaskDataset(task, env_kwargs, wrappers=wrappers, num_trials=20, seq_len=50, batch_first=True), 
-    static=False,
+    NeurogymTaskDataset(task, env_kwargs, wrappers=wrappers, num_trials=20, seq_len=200, batch_first=True, save_envs=True), 
+    static=True,
     batch_size=20, 
     shuffle=False, 
 )
@@ -48,15 +53,16 @@ loggers = [
     # pl.loggers.WandbLogger(project='ttrnn-dev'),
 ]
 callbacks = [
-    # SuccessRate(log_every_n_epochs=2, include_abort=True, threshold=0.5),
-    # TrajectoryPlot(log_every_n_epochs=2),
-    # TaskPlot(log_every_n_epochs=2),
+    TaskPerformance(log_every_n_epochs=2, threshold=0.0),
+    # TrajectoryPlot(log_every_n_epochs=5),
+    # TaskPlot(log_every_n_epochs=5),
 ]
 
 trainer = pl.Trainer(
     max_epochs=100,
     callbacks=callbacks,
-    gpus=0,
+    accelerator='cpu',
+    # devices=1,
     num_nodes=1,
     log_every_n_steps=1,
     enable_progress_bar=True,

@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import pytorch_lightning as pl
-from .models import rateRNN # RNN
+from . import models
 
 def cross_entropy(input, target):
     """Wrapper for torch F.cross_entropy with input shape handling
@@ -35,10 +35,10 @@ class SupervisedRNN(pl.LightningModule):
         self.set_loss_func()
 
     def build_rnn(self):
-        rnn_type = self.hparams.get('rnn_type', 'rnn')
+        rnn_type = self.hparams.get('rnn_type', 'RNN')
         rnn_params = self.hparams.get('rnn_params', {})
-        if (rnn_type.lower() in ['rnn', 'vanilla', 'elman']):
-            self.model = rateRNN(**rnn_params)
+        if hasattr(models, rnn_type):
+            self.model = getattr(models, rnn_type)(**rnn_params)
         else:
             raise ValueError()
     
@@ -50,10 +50,12 @@ class SupervisedRNN(pl.LightningModule):
             optimizer = optim.SGD(self.parameters(), **optim_params)
         elif (optim_type.lower() == 'adam'):
             optimizer = optim.Adam(self.parameters(), **optim_params)
+        elif hasattr(optim, optim_type):
+            optimizer = getattr(optim, optim_type)(self.parameters(), **optim_params)
         else:
             raise ValueError()
         return {
-            'optimizer': optimizer
+            'optimizer': optimizer,
         }
     
     def forward(self, X, hx=None):

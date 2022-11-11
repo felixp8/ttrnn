@@ -228,6 +228,50 @@ class FixedPointFinder:
         else:
             return state_samples
 
+    def find_candidate_fps(self, state_traj, fp_tol=1e-6, fp_min_t=4):
+        tlen = state_traj.shape[1]
+        dists = torch.cdist(state_traj, state_traj)
+        # for now, just loop
+        base_indices = torch.triu_indices(fp_min_t, fp_min_t, offset=1)
+        candidate_fps = []
+        candidate_dists = []
+        for t in range(0, tlen - fp_min_t):
+            blocks = dists[:, base_indices[0,:] + t, base_indices[1,:] + t]
+            blocks_mean = blocks.mean(dim=1)
+            matches = torch.nonzero(blocks_mean < fp_tol)
+            if matches.numel() > 0:
+                fps = state_traj[matches, t, :]
+                candidate_fps.append(fps)
+                candidate_dists.append(blocks_mean[matches])
+        if len(candidate_fps) == 0:
+            return torch.empty(0, state_traj.shape[2]), torch.empty()
+        candidate_fps = torch.cat(candidate_fps, dim=0)
+        candidate_dists = torch.cat(candidate_dists, dim=0)
+        # remove duplicates
+        fp_dists = torch.nn.functional.pdist(candidate_fps)
+        dist_idxs = torch.triu_indices(candidate_fps.shape[0], candidate_fps.shape[0], offset=1)
+        # again, just loop
+        duplicates = []
+        for i in range(len(fp_dists)): # don't need loop if using fp_tol
+            dist = fp_dists[i]
+            fp_1 = dist_idxs[0, i]
+            fp_2 = dist_idxs[1, i]
+            # if (dist < candidate_dists[fp_1]) and (dist < candidate_dists[fp_2]):
+            if dist < fp_tol:
+                duplicates.append((fp_1, fp_2))
+        # remove most common fps until no duplicates
+        remove_list = []
+        while len(duplicates) > 0:
+            dup_flat = [fp for tup in duplicates for fp in tup]
+            fp, count = np.unique(dup_flat, return_counts=True)
+            remove_fp = fp[np.argmax(count)]
+            duplicates = [tup for tup in duplicates in remove_fp not in tup]
+            remove_list.append(remove_fp)
+        keep_idx = torch.Tensor([i for i in range(candidate_fps.shape[0]) if i not in remove_list])
+        candidate_fps = candidate_fps[keep_idx]
+        candidate_dists = candidate_dists[keep_idx]
+        return candidate_fps, candidate_dists  
+        
     def _build_state_vars(self, initial_states, inputs):
         initial_states, inputs = to_torch(initial_states, inputs, device=self.device)
         initial_states = self._concat_state(initial_states)

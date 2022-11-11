@@ -38,7 +38,7 @@ class RNNBase(nn.Module):
         if kwargs.get('type', 'linear') == 'linear':
             readout = nn.Linear(self.hidden_size, self.output_size, **kwargs.get('params', {}))
         else:
-            readout = getattr(nn, kwargs.get('type'))(kwargs.get('params'))
+            readout = getattr(nn, kwargs.get('type'))(**kwargs.get('params'))
         if kwargs.get('activation', 'none') == 'none':
             activation = nn.Identity()
         elif kwargs.get('activation', 'none') == 'softmax':

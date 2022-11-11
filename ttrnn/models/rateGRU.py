@@ -94,16 +94,16 @@ class rateGRUCell(RNNCellBase):
         hx = hx * (1 - self.alpha * z) + n * self.alpha * z
         return hx
 
-class leakyGRU(RNNBase):
+class rateGRU(RNNBase):
     __constants__ = ['input_size', 'hidden_size', 'output_size', 'nonlinearity', 'bias',
                      'batch_first', 'bidirectional', 'h0']
 
-    def __init__(self, input_size, hidden_size, output_size, bias=True, 
+    def __init__(self, input_size, hidden_size, output_size, bias=True, nonlinearity='relu',
                  dt=10, tau=50, learnable_h0=True, batch_first=False,
                  init_kwargs={}, noise_kwargs={}, output_kwargs={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
-        rnn_cell = leakyGRUCell(input_size, hidden_size, bias, dt, tau, init_kwargs, noise_kwargs, device, dtype)
-        super(leakyGRU, self).__init__(rnn_cell, input_size, hidden_size, output_size, batch_first, output_kwargs)
+        rnn_cell = rateGRUCell(input_size, hidden_size, bias, nonlinearity, dt, tau, init_kwargs, noise_kwargs, device, dtype)
+        super(rateGRU, self).__init__(rnn_cell, input_size, hidden_size, output_size, batch_first, output_kwargs)
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
@@ -114,6 +114,30 @@ class leakyGRU(RNNBase):
             self.register_parameter('h0', None)
             # self.h0 = nn.Parameter(torch.zeros((1, self.hidden_size), **factory_kwargs), requires_grad=False)
         self.reset_parameters()
+
+    def _configure_output(self, **kwargs):
+        """Fix this"""
+        if kwargs.get('type', 'linear') == 'linear':
+            readout = nn.Linear(self.hidden_size, self.output_size, **kwargs.get('params', {}))
+        else:
+            raise ValueError
+        if kwargs.get('activation', 'none') == 'none':
+            activation = nn.Identity()
+        elif kwargs.get('activation', 'none') == 'softmax':
+            activation = nn.Softmax(dim=-1)
+        else:
+            raise ValueError
+        if kwargs.get('rate_readout', True):
+            self.readout = nn.Sequential(
+                self.rnn_cell.hfn,
+                readout,
+                activation
+            )
+        else:
+            self.readout = nn.Sequential(
+                readout,
+                activation
+            )
     
     def build_initial_state(self, batch_size, device=None, dtype=None):
         """Return B x H initial state tensor"""

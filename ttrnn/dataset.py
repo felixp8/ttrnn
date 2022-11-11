@@ -24,25 +24,8 @@ def to_torch_dtype(np_dtype):
         print(f"WARNING: No matching PyTorch dtype found for dtype {np.dtype(np_dtype)}")
     return th_dtype
 
-class DiscreteToBoxWrapper(ngym.TrialWrapper):
-    def __init__(self, env):
-        super().__init__(env)
-        assert isinstance(env.action_space, gym.spaces.Discrete), \
-            "Should only be used to wrap Discrete envs."
-        self.n = self.action_space.n
-        self.action_space = gym.spaces.Box(0, 1, (self.n,))
-    
-    def new_trial(self, **kwargs):
-        trial = self.env.new_trial(**kwargs)
-        old_gt = self.unwrapped.gt
-        env_gt = np.zeros((self.unwrapped.gt.shape[0], self.n),
-                              dtype=np.float32)
-        env_gt[np.arange(env_gt.shape[0]), old_gt] = 1.
-        self.unwrapped.gt = env_gt
-        return trial
-
 class NeurogymTaskDataset(Dataset):
-    def __init__(self, env, env_kwargs={}, wrappers=[], num_trials=400, seq_len=1000, batch_first=False, seed=None):
+    def __init__(self, env, env_kwargs={}, wrappers=[], num_trials=400, seq_len=1000, batch_first=False, save_envs=False, seed=None):
         if isinstance(env, gym.Env):
             self.env = copy.deepcopy(env)
         else:
@@ -57,6 +40,7 @@ class NeurogymTaskDataset(Dataset):
         self.batch_first = batch_first
         self.num_trials = num_trials
         self.seq_len = seq_len
+        self.save_envs = save_envs
 
         obs_shape = self.env.observation_space.shape
         action_shape = self.env.action_space.shape
@@ -77,16 +61,24 @@ class NeurogymTaskDataset(Dataset):
         
         self._inputs = torch.empty(self.input_shape, dtype=obs_dtype)
         self._target = torch.empty(self.target_shape, dtype=act_dtype)
+        self.stored_envs = []
         
-        # self._build_dataset()
+        self._build_dataset() # to fix: when not static, first build data will never be used
 
     def _build_dataset(self, **kwargs):
         env = self.env
         for i in range(self.num_trials):
             seq_start = 0
             seq_end = 0
+            env_list = []
             while seq_end < self.seq_len:
                 env.new_trial(**kwargs)
+                if self.save_envs:
+                    # ideally would only save env.unwrapped, but
+                    # currently with DiscreteToBoxWrapper, need 
+                    # overridden gt_now. Potential fix: move
+                    # expanding action space to Dataset obj
+                    env_list.append(copy.deepcopy(env))
                 ob, gt = env.ob, env.gt
                 if self._expand_action:
                     gt = gt[:, None]
@@ -102,6 +94,8 @@ class NeurogymTaskDataset(Dataset):
                     self._inputs[seq_start:seq_end, i, ...] = torch.from_numpy(ob[:seq_len])
                     self._target[seq_start:seq_end, i, ...] = torch.from_numpy(gt[:seq_len])
                 seq_start = seq_end
+            if self.save_envs:
+                self.stored_envs.append(env_list)
 
     def __len__(self):
         return self.num_trials
@@ -128,6 +122,3 @@ class NeurogymDataLoader(DataLoader):
     
     def unfreeze(self):
         self.frozen = False
-
-# class NeurogymMultiTaskDataset(Dataset):
-#     def __init__(self):

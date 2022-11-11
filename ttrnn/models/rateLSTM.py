@@ -113,6 +113,30 @@ class rateLSTM(RNNBase):
             self.register_parameter('h0', None)
             # self.h0 = nn.Parameter(torch.zeros((1, self.hidden_size), **factory_kwargs), requires_grad=False)
         self.reset_parameters()
+
+    def _configure_output(self, **kwargs):
+        """Fix this"""
+        if kwargs.get('type', 'linear') == 'linear':
+            readout = nn.Linear(self.hidden_size, self.output_size, **kwargs.get('params', {}))
+        else:
+            raise ValueError
+        if kwargs.get('activation', 'none') == 'none':
+            activation = nn.Identity()
+        elif kwargs.get('activation', 'none') == 'softmax':
+            activation = nn.Softmax(dim=-1)
+        else:
+            raise ValueError
+        if kwargs.get('rate_readout', True):
+            self.readout = nn.Sequential(
+                self.rnn_cell.hfn,
+                readout,
+                activation
+            )
+        else:
+            self.readout = nn.Sequential(
+                readout,
+                activation
+            )
     
     def build_initial_state(self, batch_size, device=None, dtype=None):
         """Return B x H initial state tensor"""

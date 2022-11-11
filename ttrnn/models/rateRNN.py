@@ -111,7 +111,7 @@ class rateRNN(RNNBase):
     def _configure_output(self, **kwargs):
         """Fix this"""
         if kwargs.get('type', 'linear') == 'linear':
-            readout = nn.Linear(kwargs.get('hidden_size'), kwargs.get('output_size'))
+            readout = nn.Linear(self.hidden_size, self.output_size, **kwargs.get('params', {}))
         else:
             raise ValueError
         if kwargs.get('activation', 'none') == 'none':
@@ -121,14 +121,13 @@ class rateRNN(RNNBase):
         else:
             raise ValueError
         if kwargs.get('rate_readout', True):
-            print('it works')
-            return nn.Sequential(
-                kwargs.get('rnn_cell').hfn,
+            self.readout = nn.Sequential(
+                self.rnn_cell.hfn,
                 readout,
                 activation
             )
         else:
-            return nn.Sequential(
+            self.readout = nn.Sequential(
                 readout,
                 activation
             )

@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_lightning as pl
 import torch
+import copy
 from PIL import Image
 from scipy.linalg import LinAlgWarning
 from sklearn.decomposition import PCA
@@ -243,11 +244,11 @@ class TaskPlot(pl.Callback):
         plt.close()
 
 
-class SuccessRate(pl.Callback):
+class TaskPerformance(pl.Callback):
     """Computes task success rate
     """
 
-    def __init__(self, split='val', threshold=0.5, include_abort=False, log_every_n_epochs=100):
+    def __init__(self, split='val', threshold=0.0, burn_in=5, log_every_n_epochs=100):
         """Initializes the callback.
 
         Parameters
@@ -257,8 +258,9 @@ class SuccessRate(pl.Callback):
         """
         assert split in ['train', 'val']
         self.split = split
-        self.threshold = threshold # only useful for supervised
-        self.include_abort = include_abort # include aborted trials in success rate
+        self.threshold = threshold # only useful for supervised MSE
+        self.burn_in = burn_in # samples to ignore at the beginning
+        # self.include_abort = include_abort # include aborted trials in success rate
         self.log_every_n_epochs = log_every_n_epochs
 
     def on_validation_epoch_end(self, trainer, pl_module):
@@ -280,6 +282,8 @@ class SuccessRate(pl.Callback):
         else:
             dataloader = trainer.val_dataloaders
         dataloader = dataloader[0]
+        if not dataloader.dataset.save_envs:
+            return
         dataloader.freeze()
         model_outputs = []
         task_targets = []
@@ -293,162 +297,137 @@ class SuccessRate(pl.Callback):
             task_targets.append(target)
         model_outputs = torch.cat(model_outputs).detach().cpu().numpy()
         task_targets = torch.cat(task_targets).detach().cpu().numpy()
-        env = dataloader.dataset.env
         if isinstance(pl_module, SupervisedRNN):
+            # should possibly be readout dependent - softmax vs. linear.
+            # these, however, should also be tied to loss func ... I think
             loss_func_name = pl_module.hparams.get('loss_func', 'mse_loss')
             if loss_func_name == 'mse_loss':
-                success_rate = self._mse_loss_success_rate(model_outputs, task_targets, env)
+                success_rate, mean_reward = self._mse_loss_success_rate(model_outputs, task_targets, dataloader.dataset)
             elif loss_func_name == 'cross_entropy':
-                success_rate = self._cross_entropy_success_rate(model_outputs, task_targets, env)
+                success_rate, mean_reward = self._cross_entropy_success_rate(model_outputs, task_targets, dataloader.dataset)
         else:
             return
         pl_module.log(f"{self.split}/success_rate", success_rate)
-        # print(success_rate)
+        pl_module.log(f"{self.split}/mean_reward", mean_reward)
+        print(success_rate)
         
-    def _mse_loss_success_rate(self, model_outputs, task_targets, env):
-        """Probably needs cleanup.
-        Currently assuming that target outputs are between 0 and 1 for Box.
-        Unsure if safe to assume there's always fixation for Box - currently not assuming that.
-        Unsure if safe to assume target outputs are one-hot for Box - currently not assuming that.
+    def _mse_loss_success_rate(self, model_outputs, task_targets, dataset):
+        """Needs cleanup.
         """
-        if model_outputs.shape[1] != task_targets.shape[1]:
-            # TODO: print warning message
-            return -1
-        if isinstance(env.action_space, gym.spaces.Box):
-            # import pdb; pdb.set_trace()
-            success = []
-            for idx in range(model_outputs.shape[0]):
-                output = model_outputs[idx]
-                target = task_targets[idx]
-                fixation_idx = env.unwrapped.action_space.name.get('fixation', None)
-                if fixation_idx is None or not isinstance(fixation_idx, (float, int)):
-                    trial_splits = [0, target.shape[0]]
-                else:
-                    fixation_idx = int(round(fixation_idx))
-                    trial_splits = [0] + (np.where(np.diff(target[:, fixation_idx]) > 0)[0] + 1).tolist() + [target.shape[0]]
-                for trial_num in range(len(trial_splits) - 1):
-                    trial_success = 1
-                    start, end = trial_splits[trial_num], trial_splits[trial_num + 1]
-                    trial_output = output[start:end]
-                    trial_target = target[start:end]
-                    # Check for trial completeness
-                    if fixation_idx is not None:
-                        resp_mask = (trial_target[:,fixation_idx] == 0)
-                        if np.sum(resp_mask) == 0:
-                            continue
-                    else:
-                        resp_mask = np.ones((trial_target.shape[0],), dtype=bool)
-                    if not np.any(trial_target[resp_mask, :] > 0):
-                        continue
-                    # Evaluate success
-                    # fail conditions (during fixation): 
-                    # - fixation drops below (1 - threshold) -> abort
-                    # - any other output rises above threshold during fixation -> abort
-                    # fail conditions (after fixation):
-                    # - while target is high, output rises above threshold at least once
-                    # - while target is low, output remains below (1 - threshold)
-                    for col in range(trial_output.shape[1]):
-                        col_target = trial_target[:, col]
-                        col_output = trial_output[:, col]
-                        changes = [0] + (np.where(np.diff(col_target))[0] + 1).tolist() + [col_target.shape[0]]
-                        for period_num in range(len(changes) - 1):
-                            period_start, period_end = changes[period_num], changes[period_num + 1]
-                            period_target = col_target[period_start:period_end]
-                            period_output = col_output[period_start:period_end]
-                            if period_target[0] == 0: # zero period
-                                if np.any(period_output > ((1 - self.threshold))):
-                                    trial_success = 0 # fail
-                                    break
-                            elif period_target[0] > 0: # response period
-                                if col == fixation_idx:
-                                    if np.any(period_output < (self.threshold)):
-                                        trial_success = -1 # abort
-                                        break
-                                else:
-                                    if np.all(period_output < (self.threshold)):
-                                        trial_success = 0 # fail
-                                        break
-                        if trial_success < 1:
-                            break
-                    success.append(trial_success)
-            success = np.array(success)
-            if self.include_abort:
-                success[success < 0] = 0.
-            else:
-                success = success[success >= 0]
-            success_rate = np.mean(success) if len(success) > 0 else -1
-            return success_rate
-        elif isinstance(env.action_space, gym.spaces.Discrete):
-            return -1
-        else:
-            return -1
+        # if model_outputs.shape[-1] > 1:
+        #     # 'Box' output
+        #     def get_actions(output, env):
+        #         # output is T x C dimensional
+        #         actions = np.argmax(output, axis=1).astype(int)
+        #         above_thresh = np.any(output >= self.threshold, axis=1)
+        #         actions = actions * above_thresh # assumes fixation output is 0
+        #         # valid = np.all(above_thresh == 1)
+        #         valid = True # currently allows multiple above-threshold outputs
+        #         return actions, valid
+        # else:
+        #     # 'Discrete' output, not recommended
+        #     # Probably technically fails every time unless output jumps rapidly
+        #     def get_actions(output, env):
+        #         # output is T x 1 or T dimensional
+        #         actions = np.round(output).astype(int)
+        #         n = env.unwrapped.action_space.n
+        #         valid = np.all(np.logical_and(actions >= 0, actions < n))
+        #         return actions, valid
+        success = []
+        rewards = []
+        for idx in range(model_outputs.shape[0]):
+            env_list = dataset.stored_envs[idx]
+            output = model_outputs[idx]
+            # target = task_targets[idx]
+            start_t = 0
+            for env in env_list:
+                tlen = env.unwrapped.gt.shape[0]
+                if (start_t + tlen > output.shape[0]): # incomplete trial
+                    continue
+                trial_output = output[start_t:(start_t + tlen)]
+                # actions, valid = get_actions(trial_output, env)
+                actions = trial_output
+                valid = True
+                if not valid:
+                    # treat invalid output as abort
+                    success.append(env.unwrapped.rewards.get('abort', -0.1))
+                    continue
+                env = copy.deepcopy(env)
+                while (env.unwrapped.t_ind < self.burn_in):
+                    ob, reward, done, info = env.step(env.gt_now)
+                if done:
+                    print('WARNING: trial terminated in burn-in.')
+                    # import pdb; pdb.set_trace()
+                while not done and not info['new_trial'] and (env.unwrapped.t_ind < actions.shape[0]):
+                    action = actions[env.unwrapped.t_ind]
+                    ob, reward, done, info = env.step(action)
+                # import pdb; pdb.set_trace()
+                performance = info['performance']
+                success.append(performance)
+                rewards.append(reward)
+                if reward == -0.1:
+                    import pdb; pdb.set_trace()
+                start_t += tlen
+        success = np.array(success)
+        rewards = np.array(rewards)
+        # if self.include_abort: # assuming abort < 0, fail == 0, success > 0
+        #     success[success < 0] = 0.
+        # else:
+        #     success = success[success >= 0]
+        # success[success > 0] = 1.
+        success_rate = np.mean(success) if len(success) > 0 else -0.1
+        mean_reward = np.mean(rewards) if len(rewards) > 0 else -0.1
+        return success_rate, mean_reward
 
-    def _cross_entropy_success_rate(self, model_outputs, task_targets, env):
-        """Current criteria:
-        During fixation, output is always fixation.
-        After fixation, output must at some point be target output, 
-            and must always be either fixation or target output (allowing for reaction time). 
+    def _cross_entropy_success_rate(self, model_outputs, task_targets, dataset):
+        """Needs cleanup
         """
-        if isinstance(env.action_space, (gym.spaces.Discrete, gym.spaces.Box)):
-            success = []
-            for idx in range(model_outputs.shape[0]):
-                output = model_outputs[idx]
-                output = np.argmax(output, axis=1)
-                target = task_targets[idx]
-                if target.shape[1] > 1:
-                    target = np.argmax(target, axis=1) # assuming one-hot
-                elif target.shape[1] == 1:
-                    target = target[:,0]
-                # How to identify trial start?
-                fixation_val = env.action_space.name.get('fixation', None)
-                if fixation_val is None or not isinstance(fixation_val, (float, int)):
-                    trial_splits = [0, target.shape[0]]
-                else:
-                    trial_splits = [0] + (np.where(np.diff(target == fixation_val))[0] + 1).tolist() + [target.shape[0]]
-                for trial_num in range(len(trial_splits) - 1):
-                    trial_success = 1
-                    start, end = trial_splits[trial_num], trial_splits[trial_num + 1]
-                    trial_output = output[start:end]
-                    trial_target = target[start:end]
-                    # Check for trial completeness
-                    if fixation_val is not None:
-                        resp_mask = (trial_target != fixation_val)
-                        if np.sum(resp_mask) == 0:
-                            continue
-                    else:
-                        resp_mask = np.ones((trial_target.shape[0],), dtype=bool)
-                    if not np.any(trial_target[resp_mask] > 0):
-                        continue
-                    # Evaluate success
-                    # fail conditions (during fixation): 
-                    # - output != fixation -> abort
-                    # fail conditions (after fixation):
-                    # - output != target at any point -> fail
-                    # - output not in [target, fixation] at all points -> fail
-                    changes = [0] + (np.where(np.diff(trial_target))[0] + 1).tolist() + [trial_target.shape[0]]
-                    for period_num in range(len(changes) - 1):
-                        period_start, period_end = changes[period_num], changes[period_num + 1]
-                        period_target = trial_target[period_start:period_end]
-                        period_output = trial_output[period_start:period_end]
-                        if period_target[0] == fixation_val: # fixation period.
-                            if np.any(period_output != fixation_val):
-                                trial_success = -1
-                                break
-                        else: # response period
-                            if not np.any(period_output == period_target[0]):
-                                trial_success = 0 # fail
-                                break
-                            elif np.any(~np.isin(period_output, [fixation_val, period_target[0]])):
-                                trial_success = 0 # fail
-                                break
-                    success.append(trial_success)
-            success = np.array(success)
-            if self.include_abort:
-                success[success < 0] = 0.
-            else:
-                success = success[success >= 0]
-            success_rate = np.mean(success) if len(success) > 0 else -1
-            return success_rate
-        else:
-            # print warning
-            return -1
+        # 'Box' output
+        def get_actions(output, env):
+            # output is T x C dimensional
+            actions = np.argmax(output, axis=1).astype(int)
+            # above_thresh = np.sum(output >= self.threshold, axis=1)
+            # valid = np.all(above_thresh == 1)
+            return actions # , valid
+        success = []
+        rewards = []
+        for idx in range(model_outputs.shape[0]):
+            env_list = dataset.stored_envs[idx]
+            output = model_outputs[idx]
+            # target = task_targets[idx]
+            start_t = 0
+            for env in env_list:
+                tlen = env.unwrapped.gt.shape[0]
+                if (start_t + tlen > output.shape[0]): # incomplete trial
+                    continue
+                trial_output = output[start_t:(start_t + tlen)]
+                actions = get_actions(trial_output, env)
+                # if not valid:
+                #     # treat invalid output as abort
+                #     success.append(env.unwrapped.rewards.get('abort', -0.1))
+                #     continue
+                env = copy.deepcopy(env)
+                while (env.unwrapped.t_ind < self.burn_in):
+                    ob, reward, done, info = env.step(env.gt_now)
+                if done:
+                    print('WARNING: trial terminated in burn-in.')
+                while not done and not info['new_trial'] and (env.unwrapped.t_ind < actions.shape[0]):
+                    action = actions[env.unwrapped.t_ind]
+                    ob, reward, done, info = env.step(action)
+                    # import pdb; pdb.set_trace()
+                performance = info['performance']
+                success.append(performance)
+                rewards.append(reward)
+                start_t += tlen
+                # if reward == 0 and any([s > 0 for s in success]):
+                #     import pdb; pdb.set_trace()
+        success = np.array(success)
+        rewards = np.array(rewards)
+        # if self.include_abort: # assuming abort < 0, fail == 0, success > 0
+        #     success[success < 0] = 0.
+        # else:
+        #     success = success[success >= 0]
+        # success[success > 0] = 1.
+        success_rate = np.mean(success) if len(success) > 0 else -0.1
+        mean_reward = np.mean(rewards) if len(rewards) > 0 else -0.1
+        return success_rate, mean_reward
