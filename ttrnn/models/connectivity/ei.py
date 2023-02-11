@@ -24,7 +24,7 @@ class EIConnectivity(ConnectivityBase):
         self.excitatory_frac = excitatory_frac
         for weight_name, weight_size in weight_dict.items():
             if self.process_weight_dict.get(weight_name, False):
-                sign = nn.Parameter(
+                sign = nn.Parameter( # TODO: follow Dale's law (each column has same sign)
                     torch.sign(torch.rand(weight_size, **factory_kwargs) + self.excitatory_frac - 1),
                     requires_grad=False,
                 )
@@ -38,4 +38,4 @@ class EIConnectivity(ConnectivityBase):
                     getattr(self, weight_name + '_sign'))
             else:
                 weights[weight_name] = weight
-        return kwargs
+        return weights

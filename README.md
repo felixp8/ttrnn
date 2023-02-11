@@ -2,53 +2,68 @@
 PyTorch package for task-trained RNNs
 
 ## Goals
-**Models**
+### Models
+**Implemented**
 * Vanilla RNN (Elman et al. 1990)
 * GRU (Cho et al. 2014)
 * LSTM (Hochreiter et al. 1997)
-* UGRNN (Collins et al. 2017)
-* euRNN (Jing et al. 2017)
-* Excitatory-Inhibitory / Dale's law (Song et al. 2016)
-* Locality-masked RNNs (Khona et al. 2022)
-* Low-rank RNNs (Mastrogiuseppe)
-* Multi-area RNNs (hierarchical and parallel)
-* Spiking neural networks?
-* Reservoir models?
-* etc...
+* Low-rank w/ no noise (Mastrogiuseppe 2017) - *untested*
 
-**Learning Rules**
+**To do**
+* Short-term plasticity (Masse et al. 2018)
+* Low-rank w/ fixed noise (Mastrogiuseppe 2017)
+* Support low-rank, mixture-of-Gaussian bases (Beiran et al. 2021)
+* UGRNN (Collins et al. 2017)
+* Multiplicative RNN (Sustkever et al. 2011)
+* Others? euRNN, reservoir models, spiking RNNs, etc...
+
+### Connectivity constraints
+**To do**
+* Excitatory-Inhibitory / Dale's law (Song et al. 2016)
+* Arbitrary sparsity
+* Locality-masked RNNs (Khona et al. 2022)
+
+### Auxiliary losses
+**To do**
+* L1 / L2
+* Minimum description length
+* Spatial embedding (Achterberg et al. 2022)
+* Network communicability (Achterberg et al. 2022)
+* Slow point speed (Haviv et al. 2019)
+
+### Learning Rules
+**Implemented (native in Torch)**
 * SGD
 * Adam
+
+**To do**
 * SGD with clipping & scaling (Pascanu et al. 2013)
 * Hessian-free (Martens et al. 2011)
 * RTRL (Williams et al. 1989)
 * Recursive least squares (Haykins 2002)
-* FORCE (Sussillo et al. 2009)
 * Hebbian (Miconi 2017)
-* UORO (Tallec et al. 2017)
-* KF-RTRL (Mujika et al. 2018)
 * RFLO (Murray et al. 2019)
-* SnAp RTRL (Menick et al. 2021)
-* Genetic algorithm?
-* Meta-learning?
-* Multiple rules at once, varying timescales?
 * etc...
 
-**Analysis**
-* Tensorboard / WandB logging during training
-* JSLDS co-training
+### Analysis
+**Implemented (kind of)**
 * Fixed-point finding
-* RADD
+* Tensorboard / WandB logging during training
+
+**To do**
+* JSLDS co-training
+* RADD / other distillation approaches
 * Neuron clustering / task variance
 * etc...
 
-**Misc**
+### Misc
+**Implemented (kind of, supported in NeuroGym)**
 * Multi-task training, mixed or sequential
-* Flexible support for different loss functions
-* Reinforcement learning maybe, though Stable Baselines already exists
-* etc...
 
-*Disclaimer: I don't actually know what 80% of this stuff is, so the list is very tentative and ill-informed*
+**To do**
+* Flexible support for different loss functions
+* Reinforcement learning & meta-reinforcement learning
+* etc...
 
 ## Inspirations
 * Neurogym
