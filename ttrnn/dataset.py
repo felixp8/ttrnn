@@ -112,7 +112,7 @@ class NeurogymDataLoader(DataLoader):
         self.static = static
         self.frozen = False
     
-    def __iter__(self) -> '_BaseDataLoaderIter':
+    def __iter__(self):
         if not self.static and not self.frozen:
             self.dataset._build_dataset()
         return super(NeurogymDataLoader, self).__iter__()

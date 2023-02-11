@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 
 from .base import RNNBase, RNNCellBase
+from .weights.rnn import RNNWeights
 
 class rateRNNCell(RNNCellBase):
     """Discretized Rate RNN
@@ -20,14 +21,8 @@ class rateRNNCell(RNNCellBase):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.nonlinearity = nonlinearity
-        self.init_kwargs = init_kwargs
 
-        self.weight_ih = nn.Parameter(torch.empty((hidden_size, input_size), **factory_kwargs))
-        self.weight_hh = nn.Parameter(torch.empty((hidden_size, hidden_size), **factory_kwargs))
-        if bias:
-            self.bias = nn.Parameter(torch.empty((1, hidden_size), **factory_kwargs))
-        else:
-            self.register_parameter('bias', None)
+        self.weights = RNNWeights(input_size=input_size, hidden_size=hidden_size, bias=bias, **factory_kwargs)
 
         self.set_decay(dt, tau)
 
@@ -46,6 +41,18 @@ class rateRNNCell(RNNCellBase):
             self.noise_params = noise_kwargs.get('noise_params', {})
 
         self.reset_parameters()
+
+    @property
+    def weight_ih(self):
+        return self.weights.get_weight_ih()
+    
+    @property
+    def weight_hh(self):
+        return self.weights.get_weight_hh()
+    
+    @property
+    def bias(self):
+        return self.weights.get_bias()
     
     def reset_parameters(self):
         """Should enable parameter-specific initialization, e.g. bias = 0, weights = normal.
@@ -77,17 +84,21 @@ class rateRNNCell(RNNCellBase):
             return getattr(torch, self.noise_type)(size=(1, self.hidden_size), out=out, **self.noise_params)
     
     def forward(self, input, hx):
+        weights = self.weights()
+        weight_ih = weights['weight_ih']
+        weight_hh = weights['weight_hh']
+        bias = weights['bias']
         device, dtype = input.device, input.dtype
-        if self.bias is None:
+        if bias is None:
             hx = hx * (1 - self.alpha) + self.alpha * (
-                torch.mm(input, self.weight_ih.t()) + 
-                torch.mm(self.hfn(hx), self.weight_hh.t()) + 
+                torch.mm(input, weight_ih.t()) + 
+                torch.mm(self.hfn(hx), weight_hh.t()) + 
                 self.noise(device, dtype))
         else:
             hx = hx * (1 - self.alpha) + self.alpha * (
-                torch.mm(input, self.weight_ih.t()) + 
-                torch.mm(self.hfn(hx), self.weight_hh.t()) + 
-                self.bias + self.noise(device, dtype))
+                torch.mm(input, weight_ih.t()) + 
+                torch.mm(self.hfn(hx), weight_hh.t()) + 
+                bias + self.noise(device, dtype))
         return hx
 
 class rateRNN(RNNBase):
