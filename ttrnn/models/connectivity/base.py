@@ -5,7 +5,7 @@ import torch.nn as nn
 class ConnectivityBase(nn.Module):
     def __init__(self, process_weight_dict={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
-        super(ConnectivityBase, self).__init__(**factory_kwargs)
+        super(ConnectivityBase, self).__init__()
         self.process_weight_dict = process_weight_dict
     
     def forward(self, **kwargs):
@@ -17,7 +17,8 @@ class ConnectivityBase(nn.Module):
 
 
 class ConnectivityStack(ConnectivityBase):
-    def __init__(self, connectivity_list):
+    def __init__(self, connectivity_list=[], device=None, dtype=None):
+        factory_kwargs = {'device': device, 'dtype': dtype}
         super(ConnectivityStack, self).__init__()
         self.connectivity_list = nn.ModuleList(connectivity_list)
     

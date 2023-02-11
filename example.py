@@ -15,7 +15,7 @@ rnn_params = {
     'bias': True, 
     'learnable_h0': False,
     'batch_first': True,
-    'init_kwargs': {'init_func': 'normal_', 'kwargs': {'mean': 0.0, 'std': 1 / (64 ** 0.5)}},
+    # 'init_config': {'init_func': 'normal_', 'kwargs': {'mean': 0.0, 'std': 1 / (64 ** 0.5)}},
     'output_kwargs': {'type': 'linear', 'activation': 'none'},
     'noise_kwargs': {'use_noise': True, 'noise_type': 'normal', 'noise_params': {'mean': 0.0, 'std': 0.05}}
 }

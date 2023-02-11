@@ -14,39 +14,46 @@ class GRUWeights(WeightsBase):
         input_size: int, 
         hidden_size: int, 
         bias: bool = True, 
-        init_dict: Optional[dict] = None, 
-        connectivity: ConnectivityBase = ConnectivityStack, 
+        init_config: Optional[dict] = None, 
+        trainable_config: dict = {},
+        connectivity: ConnectivityBase = ConnectivityStack(), 
         device=None, 
         dtype=None,
     ) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
-        weight_dict = {
+        weight_config = {
             'weight_ih': (hidden_size*3, input_size),
             'weight_hh': (hidden_size*3, hidden_size),
-            'bias': (hidden_size*3,) if bias else None,
+            'bias_ih': (hidden_size*3,) if bias else None,
+            'bias_hh': (hidden_size*3,) if bias else None,
         }
-        if init_dict is None:
+        if init_config is None:
             uniform_kwargs = {
                 'a': -1.0 / math.sqrt(hidden_size), 
                 'b': 1.0 / math.sqrt(hidden_size)
             }
-            init_dict = {
+            init_config = {
                 'weight_ih': ('uniform_', uniform_kwargs),
                 'weight_hh': ('uniform_', uniform_kwargs),
-                'bias': ('uniform_', uniform_kwargs),
+                'bias_ih': ('uniform_', uniform_kwargs),
+                'bias_hh': ('uniform_', uniform_kwargs),
             }
         super(GRUWeights, self).__init__(
-            weight_dict=weight_dict,
-            init_dict=init_dict,
+            weight_config=weight_config,
+            init_config=init_config,
+            trainable_config=trainable_config,
             connectivity=connectivity,
             **factory_kwargs
         )
     
-    def get_weight_ih(self):
-        return self.get('weight_ih')
+    def get_weight_ih(self, cached: bool = False):
+        return self.get('weight_ih', cached=cached)
     
-    def get_weight_hh(self):
-        return self.get('weight_hh')
+    def get_weight_hh(self, cached: bool = False):
+        return self.get('weight_hh', cached=cached)
     
-    def get_bias(self):
-        return self.get('bias')
+    def get_bias_ih(self, cached: bool = False):
+        return self.get('bias_ih', cached=cached)
+        
+    def get_bias_hh(self, cached: bool = False):
+        return self.get('bias_hh', cached=cached)

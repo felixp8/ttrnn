@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base import RNNBase, RNNCellBase
+from .weights import LSTMWeights
 
 class rateLSTMCell(RNNCellBase):
     """Discretized rate LSTM
@@ -16,23 +17,16 @@ class rateLSTMCell(RNNCellBase):
     c_t = (1 - alpha) * f_t * c_{t-1} + alpha * i_t * g_t
     h_t = o_t * f(c_t)
     """
-    __constants__ = ['input_size', 'hidden_size', 'bias']
+    __constants__ = ['input_size', 'hidden_size', 'nonlinearity', 'bias']
 
     def __init__(self, input_size, hidden_size, bias=True, nonlinearity='relu', 
-                 dt=10, tau=50, init_kwargs={}, noise_kwargs={}, device=None, dtype=None):
+                 dt=10, tau=50, init_config={}, noise_kwargs={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
         super(rateLSTMCell, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.nonlinearity = nonlinearity
-        self.init_kwargs = init_kwargs
-
-        self.weight_ih = nn.Parameter(torch.empty((hidden_size*4, input_size), **factory_kwargs))
-        self.weight_hh = nn.Parameter(torch.empty((hidden_size*4, hidden_size), **factory_kwargs))
-        if bias:
-            self.bias = nn.Parameter(torch.empty((1, hidden_size*4), **factory_kwargs))
-        else:
-            self.register_parameter('bias', None)
+        self.weights = LSTMWeights(input_size=input_size, hidden_size=hidden_size, bias=bias, init_config=init_config, **factory_kwargs)
 
         if self.nonlinearity == 'relu': # for consistency with Torch
             self.hfn = nn.ReLU()
@@ -48,20 +42,30 @@ class rateLSTMCell(RNNCellBase):
             self.noise_type = noise_kwargs.get('noise_type', 'normal')
             self.noise_params = noise_kwargs.get('noise_params', {})
 
-        self.set_decay(dt, tau)
+        self.dt = dt
+        self.tau = tau
+
         self.reset_parameters()
 
-    def reset_parameters(self):
-        init_func = getattr(nn.init, self.init_kwargs.get('init_func', 'normal_'))
-        for weight in self.parameters():
-            init_func(weight, **self.init_kwargs.get('kwargs', {}))
+    @property
+    def weight_ih(self):
+        return self.weights.get_weight_ih(cached=True)
     
-    def set_decay(self, dt=None, tau=None):
-        if dt is not None:
-            self.dt = dt
-        if tau is not None:
-            self.tau = tau
-        self.alpha = self.dt / self.tau
+    @property
+    def weight_hh(self):
+        return self.weights.get_weight_hh(cached=True)
+    
+    @property
+    def bias(self):
+        return self.weights.get_bias(cached=True)
+    
+    @property
+    def alpha(self):
+        return self.dt / self.tau
+    
+    def reset_parameters(self):
+        self.weights.reset_parameters()
+        self.weights(cached=False)
     
     def set_noise(self, use_noise=None, noise_kwargs={}):
         if use_noise:
@@ -78,12 +82,16 @@ class rateLSTMCell(RNNCellBase):
             return getattr(torch, self.noise_type)(size=(1, self.hidden_size), out=out, **self.noise_params)
     
     def forward(self, input, hx):
+        weights = self.weights(cached=True)
+        weight_ih = weights['weight_ih']
+        weight_hh = weights['weight_hh']
+        bias = weights['bias']
         device, dtype = input.device, input.dtype
         h, c = hx
         if self.bias is None:
-            ifgo = torch.mm(h, self.weight_hh.t()) + torch.mm(input, self.weight_ih.t())
+            ifgo = torch.mm(h, weight_hh.t()) + torch.mm(input, weight_ih.t())
         else:
-            ifgo = torch.mm(h, self.weight_hh.t()) + torch.mm(input, self.weight_ih.t()) + self.bias
+            ifgo = torch.mm(h, weight_hh.t()) + torch.mm(input, weight_ih.t()) + bias
         i, f, g, o = ifgo.chunk(4, 1)
         i = F.sigmoid(i)
         f = F.sigmoid(f)
@@ -99,16 +107,16 @@ class rateLSTM(RNNBase):
 
     def __init__(self, input_size, hidden_size, output_size, bias=True, nonlinearity='relu',
                  dt=10, tau=50, learnable_h0=True, batch_first=False,
-                 init_kwargs={}, noise_kwargs={}, output_kwargs={}, device=None, dtype=None):
+                 init_config={}, noise_kwargs={}, output_kwargs={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
-        rnn_cell = rateLSTMCell(input_size, hidden_size, bias, nonlinearity, dt, tau, init_kwargs, noise_kwargs, device, dtype)
+        rnn_cell = rateLSTMCell(input_size, hidden_size, bias, nonlinearity, dt, tau, init_config, noise_kwargs, device, dtype)
         super(rateLSTM, self).__init__(rnn_cell, input_size, hidden_size, output_size, batch_first, output_kwargs)
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.batch_first = batch_first
         if learnable_h0:
-            self.h0 = nn.Parameter(torch.empty((1, self.hidden_size), **factory_kwargs))
+            self.h0 = nn.Parameter(torch.empty((self.hidden_size * 2,), **factory_kwargs))
         else:
             self.register_parameter('h0', None)
             # self.h0 = nn.Parameter(torch.zeros((1, self.hidden_size), **factory_kwargs), requires_grad=False)
@@ -141,7 +149,8 @@ class rateLSTM(RNNBase):
     def build_initial_state(self, batch_size, device=None, dtype=None):
         """Return B x H initial state tensor"""
         if self.h0 is None:
-            hx = torch.zeros((batch_size, self.hidden_size), device=device, dtype=dtype)
+            zeros = torch.zeros((batch_size, self.hidden_size), device=device, dtype=dtype)
+            hx = (zeros, zeros)
         else:
-            hx = self.h0.expand(batch_size, -1)
+            hx = self.h0.unsqueeze(0).expand(batch_size, -1).chunk(2, 1)
         return hx

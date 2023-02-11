@@ -2,12 +2,16 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from .weights import WeightsBase
+
+
 class RNNCellBase(nn.Module):
     def __init__(self):
         super(RNNCellBase, self).__init__()
     
     def forward(self, input, hx):
         raise NotImplementedError
+
 
 class RNNBase(nn.Module):
     """Base RNN class"""
@@ -57,6 +61,9 @@ class RNNBase(nn.Module):
     
     def forward(self, input, hx=None):
         """Run RNN on sequence of inputs"""
+        if hasattr(self.rnn_cell, 'weights') and \
+            isinstance(getattr(self.rnn_cell, 'weights'), WeightsBase):
+            self.rnn_cell.weights(cached=False)
         device, dtype = input.device, input.dtype
         if self.batch_first:
             batch_size, seq_len, input_size = input.shape

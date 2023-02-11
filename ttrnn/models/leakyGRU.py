@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base import RNNBase, RNNCellBase
+from .weights import GRUWeights
+
 
 class leakyGRUCell(RNNCellBase):
     """Discretized GRU
@@ -17,41 +19,46 @@ class leakyGRUCell(RNNCellBase):
     __constants__ = ['input_size', 'hidden_size', 'bias']
 
     def __init__(self, input_size, hidden_size, bias=True, dt=10, tau=50, 
-                 init_kwargs={}, noise_kwargs={}, device=None, dtype=None):
+                 init_config={}, noise_kwargs={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
         super(leakyGRUCell, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
-        self.init_kwargs = init_kwargs
-
-        self.weight_ih = nn.Parameter(torch.empty((hidden_size*3, input_size), **factory_kwargs))
-        self.weight_hh = nn.Parameter(torch.empty((hidden_size*3, hidden_size), **factory_kwargs))
-        if bias:
-            self.bias_ih = nn.Parameter(torch.empty((1, hidden_size*3), **factory_kwargs))
-            self.bias_hh = nn.Parameter(torch.empty((1, hidden_size*3), **factory_kwargs))
-        else:
-            self.register_parameter('bias_ih', None)
-            self.register_parameter('bias_hh', None)
+        self.weights = GRUWeights(input_size=input_size, hidden_size=hidden_size, bias=bias, init_config=init_config, **factory_kwargs)
     
         self.use_noise = noise_kwargs.get('use_noise', False)
         if self.use_noise:
             self.noise_type = noise_kwargs.get('noise_type', 'normal')
             self.noise_params = noise_kwargs.get('noise_params', {})
 
-        self.set_decay(dt, tau)
+        self.dt = dt
+        self.tau = tau
+
         self.reset_parameters()
 
     def reset_parameters(self):
-        init_func = getattr(nn.init, self.init_kwargs.get('init_func', 'normal_'))
-        for weight in self.parameters():
-            init_func(weight, **self.init_kwargs.get('kwargs', {}))
+        self.weights.reset_parameters()
+        self.weights(cached=False)
+
+    @property
+    def weight_ih(self):
+        return self.weights.get_weight_ih(cached=True)
     
-    def set_decay(self, dt=None, tau=None):
-        if dt is not None:
-            self.dt = dt
-        if tau is not None:
-            self.tau = tau
-        self.alpha = self.dt / self.tau
+    @property
+    def weight_hh(self):
+        return self.weights.get_weight_hh(cached=True)
+    
+    @property
+    def bias_ih(self):
+        return self.weights.get_bias_ih(cached=True)
+        
+    @property
+    def bias_hh(self):
+        return self.weights.get_bias_hh(cached=True)
+    
+    @property
+    def alpha(self):
+        return self.dt / self.tau
     
     def set_noise(self, use_noise=None, noise_kwargs={}):
         if use_noise:
@@ -68,13 +75,18 @@ class leakyGRUCell(RNNCellBase):
             return getattr(torch, self.noise_type)(size=(1, self.hidden_size), out=out, **self.noise_params)
     
     def forward(self, input, hx):
+        weights = self.weights(cached=True)
+        weight_ih = weights['weight_ih']
+        weight_hh = weights['weight_hh']
+        bias_ih = weights['bias_ih']
+        bias_hh = weights['bias_hh']
         device, dtype = input.device, input.dtype
         if self.bias_hh is None:
-            rznh = torch.mm(hx, self.weight_hh.t())
-            rznu = torch.mm(input, self.weight_ih.t())
+            rznh = torch.mm(hx, weight_hh.t())
+            rznu = torch.mm(input, weight_ih.t())
         else:
-            rznh = torch.mm(hx, self.weight_hh.t()) + self.bias_hh
-            rznu = torch.mm(input, self.weight_ih.t()) + self.bias_ih
+            rznh = torch.mm(hx, weight_hh.t()) + bias_hh
+            rznu = torch.mm(input, weight_ih.t()) + bias_ih
         rh, zh, nh = rznh.chunk(3, 1)
         ru, zu, nu = rznu.chunk(3, 1)
         r = F.sigmoid(rh + ru)
@@ -89,16 +101,16 @@ class leakyGRU(RNNBase):
 
     def __init__(self, input_size, hidden_size, output_size, bias=True, 
                  dt=10, tau=50, learnable_h0=True, batch_first=False,
-                 init_kwargs={}, noise_kwargs={}, output_kwargs={}, device=None, dtype=None):
+                 init_config={}, noise_kwargs={}, output_kwargs={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
-        rnn_cell = leakyGRUCell(input_size, hidden_size, bias, dt, tau, init_kwargs, noise_kwargs, device, dtype)
+        rnn_cell = leakyGRUCell(input_size, hidden_size, bias, dt, tau, init_config, noise_kwargs, device, dtype)
         super(leakyGRU, self).__init__(rnn_cell, input_size, hidden_size, output_size, batch_first, output_kwargs)
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.batch_first = batch_first
         if learnable_h0:
-            self.h0 = nn.Parameter(torch.empty((1, self.hidden_size), **factory_kwargs))
+            self.h0 = nn.Parameter(torch.empty((self.hidden_size,), **factory_kwargs))
         else:
             self.register_parameter('h0', None)
             # self.h0 = nn.Parameter(torch.zeros((1, self.hidden_size), **factory_kwargs), requires_grad=False)
@@ -109,5 +121,5 @@ class leakyGRU(RNNBase):
         if self.h0 is None:
             hx = torch.zeros((batch_size, self.hidden_size), device=device, dtype=dtype)
         else:
-            hx = self.h0.expand(batch_size, -1)
+            hx = self.h0.unsqueeze(0).expand(batch_size, -1)
         return hx

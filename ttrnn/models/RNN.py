@@ -6,38 +6,46 @@ import torch._VF as _VF
 from typing import Optional
 
 from .base import RNNBase, RNNCellBase
-from .weights.rnn import RNNWeights
+from .weights import RNNWeights
+
 
 class RNNCell(RNNCellBase):
+    """Standard vanilla RNN
+
+    h_t = f(W_rec @ h_{t-1} + W_in @ u_t + b_h)
+    y_t = g(W_out @ h_t + b_y)
+    """
     __constants__ = ['input_size', 'hidden_size', 'nonlinearity', 'bias']
 
-    def __init__(self, input_size, hidden_size, bias=True, nonlinearity='relu', init_kwargs={}, device=None, dtype=None):
+    def __init__(self, input_size, hidden_size, bias=True, nonlinearity='relu', init_config={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
         super(RNNCell, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.nonlinearity = nonlinearity
-        self.weights = RNNWeights(input_size=input_size, hidden_size=hidden_size, bias=bias, **factory_kwargs)
+        self.weights = RNNWeights(input_size=input_size, hidden_size=hidden_size, bias=bias, init_config=init_config, **factory_kwargs)
 
         self.reset_parameters()
     
     @property
     def weight_ih(self):
-        return self.weights.get_weight_ih()
+        return self.weights.get_weight_ih(cached=True)
     
     @property
     def weight_hh(self):
-        return self.weights.get_weight_hh()
+        return self.weights.get_weight_hh(cached=True)
     
     @property
     def bias(self):
-        return self.weights.get_bias()
+        return self.weights.get_bias(cached=True)
     
     def reset_parameters(self):
         self.weights.reset_parameters()
+        self.weights(cached=False)
     
     def forward(self, input: torch.Tensor, hx: Optional[torch.Tensor] = None) -> torch.Tensor:
-        weights = self.weights()
+        weights = self.weights(cached=True)
+        ## Below copied from torch
         assert input.dim() in (1, 2), \
             f"RNNCell: Expected input to be 1-D or 2-D but received {input.dim()}-D tensor"
         is_batched = input.dim() == 2
@@ -62,7 +70,7 @@ class RNNCell(RNNCellBase):
                 weights['bias'], None,
             )
         else:
-            ret = input  # TODO: remove when jit supports exception flow
+            ret = input  # TODO: support other nonlinearities
             raise RuntimeError(
                 "Unknown nonlinearity: {}".format(self.nonlinearity))
 
@@ -73,18 +81,20 @@ class RNNCell(RNNCellBase):
 
 
 class RNN(RNNBase):
-    """Standard vanilla RNN
-
-    h_t = f(W_rec @ h_{t-1} + W_in @ u_t + b_x)
-    y_t = g(W_out @ h_t + b_y)
-    """
     __constants__ = ['input_size', 'hidden_size', 'output_size', 'nonlinearity', 'bias',
                      'batch_first', 'bidirectional', 'h0']
 
     def __init__(self, input_size, hidden_size, output_size, bias=True, nonlinearity='relu', 
                  learnable_h0=True, batch_first=False, output_kwargs={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
-        rnn_cell = RNNCell(input_size, hidden_size, bias, nonlinearity, device, dtype)
+        rnn_cell = RNNCell(
+            input_size=input_size, 
+            hidden_size=hidden_size, 
+            bias=bias, 
+            nonlinearity=nonlinearity, 
+            device=device, 
+            dtype=dtype,
+        )
         # readout = self.configure_output(**output_kwargs)
         super(RNN, self).__init__(rnn_cell, input_size, hidden_size, output_size, batch_first, output_kwargs)
         self.input_size = input_size

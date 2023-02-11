@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 
 from .base import RNNBase, RNNCellBase
+from .weights import RNNWeights
+
 
 class leakyRNNCell(RNNCellBase):
     """Discretized Elman RNN
@@ -13,20 +15,14 @@ class leakyRNNCell(RNNCellBase):
     __constants__ = ['input_size', 'hidden_size', 'nonlinearity', 'bias']
 
     def __init__(self, input_size, hidden_size, bias=True, nonlinearity='relu', 
-                 dt=10, tau=50, init_kwargs={}, noise_kwargs={}, device=None, dtype=None):
+                 dt=10, tau=50, init_config={}, noise_kwargs={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
         super(leakyRNNCell, self).__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.nonlinearity = nonlinearity
-        self.init_kwargs = init_kwargs
 
-        self.weight_ih = nn.Parameter(torch.empty((hidden_size, input_size), **factory_kwargs))
-        self.weight_hh = nn.Parameter(torch.empty((hidden_size, hidden_size), **factory_kwargs))
-        if bias:
-            self.bias = nn.Parameter(torch.empty((1, hidden_size), **factory_kwargs))
-        else:
-            self.register_parameter('bias', None)
+        self.weights = RNNWeights(input_size=input_size, hidden_size=hidden_size, bias=bias, init_config=init_config, **factory_kwargs)
 
         if self.nonlinearity == 'relu': # for consistency with Torch
             self.hfn = nn.ReLU()
@@ -37,7 +33,8 @@ class leakyRNNCell(RNNCellBase):
         else:
             raise ValueError
 
-        self.set_decay(dt, tau)
+        self.dt = dt
+        self.tau = tau
     
         self.use_noise = noise_kwargs.get('use_noise', False)
         if self.use_noise:
@@ -47,16 +44,24 @@ class leakyRNNCell(RNNCellBase):
         self.reset_parameters()
     
     def reset_parameters(self):
-        init_func = getattr(nn.init, self.init_kwargs.get('init_func', 'normal_'))
-        for weight in self.parameters():
-            init_func(weight, **self.init_kwargs.get('kwargs', {}))
+        self.weights.reset_parameters()
+        self.weights(cached=False)
     
-    def set_decay(self, dt=None, tau=None):
-        if dt is not None:
-            self.dt = dt
-        if tau is not None:
-            self.tau = tau
-        self.alpha = self.dt / self.tau
+    @property
+    def weight_ih(self):
+        return self.weights.get_weight_ih(cached=True)
+    
+    @property
+    def weight_hh(self):
+        return self.weights.get_weight_hh(cached=True)
+    
+    @property
+    def bias(self):
+        return self.weights.get_bias(cached=True)
+    
+    @property
+    def alpha(self):
+        return self.dt / self.tau
     
     def set_noise(self, use_noise=None, noise_kwargs={}):
         if use_noise:
@@ -73,17 +78,21 @@ class leakyRNNCell(RNNCellBase):
             return getattr(torch, self.noise_type)(size=(1, self.hidden_size), out=out, **self.noise_params)
     
     def forward(self, input, hx):
+        weights = self.weights(cached=True)
+        weight_ih = weights['weight_ih']
+        weight_hh = weights['weight_hh']
+        bias = weights['bias']
         device, dtype = input.device, input.dtype
-        if self.bias is None:
+        if bias is None:
             hx = hx * (1 - self.alpha) + self.alpha * self.hfn(
-                torch.mm(input, self.weight_ih.t()) + 
-                torch.mm(hx, self.weight_hh.t()) + 
+                torch.mm(input, weight_ih.t()) + 
+                torch.mm(hx, weight_hh.t()) + 
                 self.noise(device, dtype))
         else:
             hx = hx * (1 - self.alpha) + self.alpha * self.hfn(
-                torch.mm(input, self.weight_ih.t()) + 
-                torch.mm(hx, self.weight_hh.t()) + 
-                self.bias + self.noise(device, dtype))
+                torch.mm(input, weight_ih.t()) + 
+                torch.mm(hx, weight_hh.t()) + 
+                bias + self.noise(device, dtype))
         return hx
 
 class leakyRNN(RNNBase):
@@ -92,9 +101,9 @@ class leakyRNN(RNNBase):
 
     def __init__(self, input_size, hidden_size, output_size, bias=True, nonlinearity='relu', 
                  dt=10, tau=50, learnable_h0=True, batch_first=False,
-                 init_kwargs={}, noise_kwargs={}, output_kwargs={}, device=None, dtype=None):
+                 init_config={}, noise_kwargs={}, output_kwargs={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
-        rnn_cell = leakyRNNCell(input_size, hidden_size, bias, nonlinearity, dt, tau, init_kwargs, noise_kwargs, device, dtype)
+        rnn_cell = leakyRNNCell(input_size, hidden_size, bias, nonlinearity, dt, tau, init_config, noise_kwargs, device, dtype)
         super(leakyRNN, self).__init__(rnn_cell, input_size, hidden_size, output_size, batch_first, output_kwargs)
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -102,10 +111,10 @@ class leakyRNN(RNNBase):
         self.nonlinearity = nonlinearity
         self.batch_first = batch_first
         if learnable_h0:
-            self.h0 = nn.Parameter(torch.empty((1, self.hidden_size), **factory_kwargs))
+            self.h0 = nn.Parameter(torch.empty((self.hidden_size,), **factory_kwargs))
         else:
             self.register_parameter('h0', None)
-            # self.h0 = nn.Parameter(torch.zeros((1, self.hidden_size), **factory_kwargs), requires_grad=False)
+            # self.h0 = nn.Parameter(torch.zeros((self.hidden_size,), **factory_kwargs), requires_grad=False)
         self.reset_parameters()
     
     def build_initial_state(self, batch_size, device=None, dtype=None):
@@ -113,5 +122,5 @@ class leakyRNN(RNNBase):
         if self.h0 is None:
             hx = torch.zeros((batch_size, self.hidden_size), device=device, dtype=dtype)
         else:
-            hx = self.h0.expand(batch_size, -1)
+            hx = self.h0.unsqueeze(0).expand(batch_size, -1)
         return hx
