@@ -70,5 +70,5 @@ class WeightsBase(nn.Module):
         self.cache = weights
         return weights
     
-    def reset_cache(self):
+    def reset_cache(self) -> None:
         self.cache = {}

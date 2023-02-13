@@ -6,15 +6,9 @@ from typing import Optional
 from .rnn import RNNBase
 
 
-class ModelBase(nn.Module):
-    def __init__(self):
-        super(ModelBase, self).__init__()
-
-
-class TaskRNN(ModelBase):
+class A2C(nn.Module):
     def __init__(
         self,
         rnn: RNNBase,
         encoder: nn.Module = nn.Identity(),
-        
     )

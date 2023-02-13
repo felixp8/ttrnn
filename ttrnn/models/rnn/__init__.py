@@ -1,3 +1,5 @@
+from .base import RNNBase, RNNCellBase
+
 from .RNN import RNN
 from .leakyRNN import leakyRNN, leakyRNNCell
 from .rateRNN import rateRNN, rateRNNCell

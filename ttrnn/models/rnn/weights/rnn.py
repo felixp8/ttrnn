@@ -8,11 +8,12 @@ from .base import WeightsBase
 from ..connectivity.base import ConnectivityBase, ConnectivityStack
 
 
-class LSTMWeights(WeightsBase):
+class RNNWeights(WeightsBase):
     def __init__(
         self, 
         input_size: int, 
         hidden_size: int, 
+        output_size: Optional[int] = None,
         bias: bool = True, 
         init_config: Optional[dict] = None, 
         trainable_config: dict = {},
@@ -22,9 +23,10 @@ class LSTMWeights(WeightsBase):
     ) -> None:
         factory_kwargs = {'device': device, 'dtype': dtype}
         weight_config = {
-            'weight_ih': (hidden_size*4, input_size),
-            'weight_hh': (hidden_size*4, hidden_size),
-            'bias': (hidden_size*4,) if bias else None,
+            'weight_ih': (hidden_size, input_size),
+            'weight_hh': (hidden_size, hidden_size),
+            'bias': (hidden_size,) if bias else None,
+            'weight_ho': (output_size, hidden_size) if (output_size is not None) else None,
         }
         if init_config is None:
             uniform_kwargs = {
@@ -35,8 +37,9 @@ class LSTMWeights(WeightsBase):
                 'weight_ih': ('uniform_', uniform_kwargs),
                 'weight_hh': ('uniform_', uniform_kwargs),
                 'bias': ('uniform_', uniform_kwargs),
+                'weight_ho': ('uniform_', uniform_kwargs),
             }
-        super(LSTMWeights, self).__init__(
+        super(RNNWeights, self).__init__(
             weight_config=weight_config,
             init_config=init_config,
             trainable_config=trainable_config,
@@ -44,11 +47,14 @@ class LSTMWeights(WeightsBase):
             **factory_kwargs
         )
     
-    def get_weight_ih(self):
-        return self.get('weight_ih')
+    def get_weight_ih(self, cached: bool = False) -> torch.Tensor:
+        return self.get('weight_ih', cached=cached)
     
-    def get_weight_hh(self):
-        return self.get('weight_hh')
+    def get_weight_hh(self, cached: bool = False) -> torch.Tensor:
+        return self.get('weight_hh', cached=cached)
     
-    def get_bias(self):
-        return self.get('bias')
+    def get_bias(self, cached: bool = False) -> torch.Tensor:
+        return self.get('bias', cached=cached)
+
+    def get_weight_ho(self, cached: bool = False) -> torch.Tensor:
+        return self.get('weight_ho', cached=cached)
