@@ -47,12 +47,16 @@ class RNNCell(RNNCellBase):
         return self.weights.get_weight_hh(cached=True)
     
     @property
-    def bias(self):
-        return self.weights.get_bias(cached=True)
+    def bias_hh(self):
+        return self.weights.get_bias_hh(cached=True)
         
     @property
     def weight_ho(self):
         return self.weights.get_weight_ho(cached=True)
+    
+    @property
+    def bias_ho(self):
+        return self.weights.get_bias_ho(cached=True)
     
     def forward(self, input: torch.Tensor, hx: Optional[torch.Tensor] = None) -> torch.Tensor:
         weights = self.weights(cached=True)
@@ -72,13 +76,13 @@ class RNNCell(RNNCellBase):
             ret = _VF.rnn_tanh_cell(
                 input, hx,
                 weights['weight_ih'], weights['weight_hh'],
-                weights['bias'], None,
+                weights['bias_hh'], None,
             )
         elif self.nonlinearity == "relu":
             ret = _VF.rnn_relu_cell(
                 input, hx,
                 weights['weight_ih'], weights['weight_hh'],
-                weights['bias'], None,
+                weights['bias_hh'], None,
             )
         else:
             ret = input  # TODO: support other nonlinearities
@@ -96,7 +100,7 @@ class RNN(RNNBase):
                      'batch_first', 'bidirectional', 'h0']
 
     def __init__(self, input_size, hidden_size, output_size, bias=True, nonlinearity='relu', 
-                 trainable_h0=False, batch_first=False, device=None, dtype=None):
+                 trainable_h0=False, batch_first=True, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
         rnn_cell = RNNCell(
             input_size=input_size, 

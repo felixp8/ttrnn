@@ -58,7 +58,7 @@ class WeightsBase(nn.Module):
             if weight is not None:
                 return weight
         weight = getattr(self, weight_name)
-        weight = self.connectivity(**dict(weight_name=weight))[weight_name]
+        weight = self.connectivity(**{weight_name: weight})[weight_name]
         return weight
     
     def forward(self, cached: bool = False) -> dict[str, torch.Tensor]:

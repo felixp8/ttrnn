@@ -1,9 +1,10 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch._VF as _VF
 
-from typing import Optional
+from typing import Optional, Tuple
 
 from .base import RNNBase, RNNCellBase
 from .weights import LSTMWeights
@@ -19,14 +20,31 @@ class LSTMCell(RNNCellBase):
     c_t = f_t * c_{t-1} + i_t * g_t
     h_t = o_t * tanh(c_t)
     """
-    __constants__ = ['input_size', 'hidden_size', 'bias']
+    __constants__ = ['input_size', 'hidden_size', 'bias', 'use_proj']
 
-    def __init__(self, input_size, hidden_size, bias=True, init_config={}, device=None, dtype=None):
+    def __init__(self, input_size, hidden_size, proj_size=None, output_size=None, 
+                 bias=True, init_config={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
-        super(LSTMCell, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.weights = LSTMWeights(input_size=input_size, hidden_size=hidden_size, bias=bias, init_config=init_config, **factory_kwargs)
+        super(LSTMCell, self).__init__(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            bias=bias,
+            **factory_kwargs
+        )
+        self.weights = LSTMWeights(
+            input_size=input_size, 
+            hidden_size=hidden_size, 
+            proj_size=proj_size,
+            output_size=output_size,
+            bias=bias, 
+            init_config=init_config, 
+            **factory_kwargs
+        )
+        if proj_size is not None:
+            assert proj_size < hidden_size
+            self.use_proj = True
+        else:
+            self.use_proj = False
 
         self.reset_parameters()
 
@@ -39,14 +57,22 @@ class LSTMCell(RNNCellBase):
         return self.weights.get_weight_hh(cached=True)
     
     @property
-    def bias(self):
-        return self.weights.get_bias(cached=True)
+    def bias_hh(self):
+        return self.weights.get_bias_hh(cached=True)
     
-    def reset_parameters(self):
-        self.weights.reset_parameters()
-        self.weights(cached=False)
+    @property
+    def weight_hr(self):
+        return self.weights.get_weight_hr(cached=True)
     
-    def forward(self, input: torch.Tensor, hx: Optional[tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
+    @property
+    def weight_ho(self):
+        return self.weights.get_weight_ho(cached=True)
+
+    @property
+    def bias_ho(self):
+        return self.weights.get_bias_ho(cached=True)
+    
+    def forward(self, input: torch.Tensor, hx: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
         weights = self.weights(cached=True)
         assert input.dim() in (1, 2), \
             f"LSTMCell: Expected input to be 1-D or 2-D but received {input.dim()}-D tensor"
@@ -61,45 +87,73 @@ class LSTMCell(RNNCellBase):
             hx = (hx[0].unsqueeze(0), hx[1].unsqueeze(0)) if not is_batched else hx
 
         # TODO: support other nonlinearities
-        ret = _VF.lstm_cell(
-            input, hx,
-            weights['weight_ih'], weights['weight_hh'],
-            weights['bias'], None,
-        )
+        if self.use_proj:
+            ret = _VF.lstm_cell(
+                input, hx,
+                weights['weight_ih'], weights['weight_hh'],
+                weights['bias_hh'], None,
+            )
+        else:
+            weight_ih = weights['weight_ih']
+            weight_hh = weights['weight_hh']
+            bias = weights['bias_hh']
+            weight_hr = weights['weight_hr']
+            h, c = hx
+            if bias is None:
+                ifgo = torch.mm(h, weight_hh.t()) + torch.mm(input, weight_ih.t())
+            else:
+                ifgo = torch.mm(h, weight_hh.t()) + torch.mm(input, weight_ih.t()) + bias
+            i, f, g, o = ifgo.chunk(4, 1)
+            i = F.sigmoid(i)
+            f = F.sigmoid(f)
+            g = F.tanh(g)
+            o = F.sigmoid(o)
+            cy = (f * c) + (i * g)
+            hy = o * torch.tanh(cy)
+            hy = torch.mm(hy, weight_hr.t())
+            ret = (hy, cy)
 
         if not is_batched:
             ret = (ret[0].squeeze(0), ret[1].squeeze(0))
         return ret
+    
+    def output(self, hx: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+        h = hx[0]
+        return super(LSTMCell, self).output(h)
 
 
 class LSTM(RNNBase):
     __constants__ = ['input_size', 'hidden_size', 'output_size', 'nonlinearity', 'bias',
                      'batch_first', 'bidirectional', 'h0']
 
-    def __init__(self, input_size, hidden_size, output_size, bias=True, nonlinearity='relu', 
-                 learnable_h0=True, batch_first=False, init_config={}, output_kwargs={}, device=None, dtype=None):
+    def __init__(self, input_size, hidden_size, proj_size=None, output_size=None, bias=True, 
+                 trainable_h0=True, batch_first=True, init_config={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
-        rnn_cell = LSTMCell( # NOTE: does not support proj_size
+        rnn_cell = LSTMCell(
             input_size=input_size, 
             hidden_size=hidden_size, 
+            proj_size=proj_size,
+            output_size=output_size,
             bias=bias, 
             init_config=init_config,
-            device=device, 
-            dtype=dtype,
+            **factory_kwargs
         ) 
-        # readout = self.configure_output(**output_kwargs)
-        super(LSTM, self).__init__(rnn_cell, input_size, hidden_size, output_size, batch_first, output_kwargs)
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.output_size = output_size
-        self.nonlinearity = nonlinearity
-        self.batch_first = batch_first
-        if learnable_h0:
-            self.h0 = nn.Parameter(torch.empty((self.hidden_size * 2,), **factory_kwargs))
+        super(LSTM, self).__init__(
+            rnn_cell=rnn_cell, 
+            input_size=input_size, 
+            hidden_size=hidden_size, 
+            output_size=output_size, 
+            batch_first=batch_first,
+            trainable_h0=trainable_h0,
+            **factory_kwargs
+        )
+        self.reset_parameters()
+
+    def init_initial_state(self, trainable: bool, device=None, dtype=None):
+        if trainable:
+            self.h0 = nn.Parameter(torch.empty((self.hidden_size * 2,), device=device, dtype=dtype))
         else:
             self.register_parameter('h0', None)
-            # self.h0 = nn.Parameter(torch.zeros((1, self.hidden_size), **factory_kwargs), requires_grad=False)
-        self.reset_parameters()
     
     def build_initial_state(self, batch_size, device=None, dtype=None):
         """Return B x H initial state tensor"""

@@ -28,6 +28,7 @@ class GRUWeights(WeightsBase):
             'bias_ih': (hidden_size*3,) if bias else None,
             'bias_hh': (hidden_size*3,) if bias else None,
             'weight_ho': (output_size, hidden_size) if (output_size is not None) else None,
+            'bias_ho': (output_size,) if (output_size is not None) else None,
         }
         if init_config is None:
             uniform_kwargs = {
@@ -40,6 +41,7 @@ class GRUWeights(WeightsBase):
                 'bias_ih': ('uniform_', uniform_kwargs),
                 'bias_hh': ('uniform_', uniform_kwargs),
                 'weight_ho': ('uniform_', uniform_kwargs),
+                'bias_ho': ('uniform_', uniform_kwargs),
             }
         super(GRUWeights, self).__init__(
             weight_config=weight_config,
@@ -63,3 +65,6 @@ class GRUWeights(WeightsBase):
 
     def get_weight_ho(self, cached: bool = False) -> torch.Tensor:
         return self.get('weight_ho', cached=cached)
+
+    def get_bias_ho(self, cached: bool = False) -> torch.Tensor:
+        return self.get('bias_ho', cached=cached)

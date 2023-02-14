@@ -3,11 +3,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .base import RNNBase, RNNCellBase
+from typing import Optional, Tuple
+
+from .base import RNNBase, leakyRNNCellBase
 from .weights import LSTMWeights
 
 
-class leakyLSTMCell(RNNCellBase):
+class leakyLSTMCell(leakyRNNCellBase):
     """Discretized LSTM
     WARNING: to my knowledge, no precedent in literature
 
@@ -20,21 +22,34 @@ class leakyLSTMCell(RNNCellBase):
     """
     __constants__ = ['input_size', 'hidden_size', 'bias']
 
-    def __init__(self, input_size, hidden_size, bias=True, dt=10, tau=50, 
-                 init_config={}, noise_kwargs={}, device=None, dtype=None):
+    def __init__(self, input_size, hidden_size, proj_size=None, output_size=None,
+                 bias=True, dt=10, tau=50, init_config={}, noise_config={}, trainable_tau=False, 
+                 device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
-        super(leakyLSTMCell, self).__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.weights = LSTMWeights(input_size=input_size, hidden_size=hidden_size, bias=bias, init_config=init_config, **factory_kwargs)
-    
-        self.use_noise = noise_kwargs.get('use_noise', False)
-        if self.use_noise:
-            self.noise_type = noise_kwargs.get('noise_type', 'normal')
-            self.noise_params = noise_kwargs.get('noise_params', {})
-
-        self.dt = dt
-        self.tau = tau
+        super(leakyLSTMCell, self).__init__(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            dt=dt,
+            tau=tau,
+            bias=bias,
+            trainable_tau=trainable_tau,
+            noise_config=noise_config,
+            **factory_kwargs
+        )
+        self.weights = LSTMWeights(
+            input_size=input_size, 
+            hidden_size=hidden_size, 
+            proj_size=proj_size,
+            output_size=output_size,
+            bias=bias, 
+            init_config=init_config, 
+            **factory_kwargs
+        )
+        if proj_size is not None:
+            assert proj_size < hidden_size
+            self.use_proj = True
+        else:
+            self.use_proj = False
 
         self.reset_parameters()
 
@@ -47,71 +62,85 @@ class leakyLSTMCell(RNNCellBase):
         return self.weights.get_weight_hh(cached=True)
     
     @property
-    def bias(self):
-        return self.weights.get_bias(cached=True)
+    def bias_hh(self):
+        return self.weights.get_bias_hh(cached=True)
     
     @property
-    def alpha(self):
-        return self.dt / self.tau
+    def weight_hr(self):
+        return self.weights.get_weight_hr(cached=True)
     
-    def reset_parameters(self):
-        self.weights.reset_parameters()
-        self.weights(cached=False)
-    
-    def set_noise(self, use_noise=None, noise_kwargs={}):
-        if use_noise:
-            self.use_noise = use_noise
-        if noise_kwargs:
-            self.noise_type = noise_kwargs.get('noise_type', self.noise_type)
-            self.noise_params = noise_kwargs.get('noise_params', self.noise_params)
-    
-    def noise(self, device=None, dtype=None):
-        if not self.use_noise:
-            return 0. # torch.zeros((1, self.hidden_size), **self.factory_kwargs)
-        else:
-            out = torch.empty((1, self.hidden_size), device=device, dtype=dtype)
-            return getattr(torch, self.noise_type)(size=(1, self.hidden_size), out=out, **self.noise_params)
+    @property
+    def weight_ho(self):
+        return self.weights.get_weight_ho(cached=True)
+
+    @property
+    def bias_ho(self):
+        return self.weights.get_bias_ho(cached=True)
     
     def forward(self, input, hx):
         weights = self.weights(cached=True)
         weight_ih = weights['weight_ih']
         weight_hh = weights['weight_hh']
-        bias = weights['bias']
+        bias = weights['bias_hh']
         device, dtype = input.device, input.dtype
         h, c = hx
-        if self.bias is None:
+        if bias is None:
             ifgo = torch.mm(h, weight_hh.t()) + torch.mm(input, weight_ih.t())
         else:
             ifgo = torch.mm(h, weight_hh.t()) + torch.mm(input, weight_ih.t()) + bias
         i, f, g, o = ifgo.chunk(4, 1)
         i = F.sigmoid(i)
         f = F.sigmoid(f)
-        g = F.tanh(g + self.noise())
+        g = F.tanh(g + self.sample_noise(device, dtype))
         o = F.sigmoid(o)
         cy = (1 - self.alpha) * (f * c) + self.alpha * (i * g)
         hy = o * torch.tanh(cy)
+        if self.use_proj:
+            hy = torch.mm(hy, weights['weight_hr'].t())
         return (hy, cy)
+    
+    def output(self, hx: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+        h = hx[0]
+        return super(leakyLSTMCell, self).output(h)
+
 
 class leakyLSTM(RNNBase):
     __constants__ = ['input_size', 'hidden_size', 'output_size', 'nonlinearity', 'bias',
                      'batch_first', 'bidirectional', 'h0']
 
-    def __init__(self, input_size, hidden_size, output_size, bias=True, 
-                 dt=10, tau=50, learnable_h0=True, batch_first=False,
-                 init_config={}, noise_kwargs={}, output_kwargs={}, device=None, dtype=None):
+    def __init__(self, input_size, hidden_size, proj_size=None, output_size=None, bias=True, 
+                 dt=10, tau=50, trainable_h0=True, batch_first=True,
+                 init_config={}, noise_config={}, trainable_tau=False, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
-        rnn_cell = leakyLSTMCell(input_size, hidden_size, bias, dt, tau, init_config, noise_kwargs, device, dtype)
-        super(leakyLSTM, self).__init__(rnn_cell, input_size, hidden_size, output_size, batch_first, output_kwargs)
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.output_size = output_size
-        self.batch_first = batch_first
-        if learnable_h0:
-            self.h0 = nn.Parameter(torch.empty((self.hidden_size * 2,), **factory_kwargs))
+        rnn_cell = leakyLSTMCell(
+            input_size=input_size, 
+            hidden_size=hidden_size, 
+            proj_size=proj_size,
+            output_size=output_size,
+            bias=bias, 
+            dt=dt,
+            tau=tau,
+            init_config=init_config,
+            noise_config=noise_config,
+            trainable_tau=trainable_tau,
+            **factory_kwargs
+        ) 
+        super(leakyLSTM, self).__init__(
+            rnn_cell=rnn_cell, 
+            input_size=input_size, 
+            hidden_size=hidden_size, 
+            output_size=output_size, 
+            batch_first=batch_first,
+            trainable_h0=trainable_h0,
+            **factory_kwargs
+        )
+        self.reset_parameters()
+
+    def init_initial_state(self, trainable: bool, device=None, dtype=None):
+        if trainable:
+            self.h0 = nn.Parameter(torch.empty((self.hidden_size * 2,), device=device, dtype=dtype))
         else:
             self.register_parameter('h0', None)
-            # self.h0 = nn.Parameter(torch.zeros((1, self.hidden_size), **factory_kwargs), requires_grad=False)
-        self.reset_parameters()
     
     def build_initial_state(self, batch_size, device=None, dtype=None):
         """Return B x H initial state tensor"""

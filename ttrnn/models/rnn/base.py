@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 
 from typing import Union
@@ -26,7 +27,7 @@ class RNNCellBase(nn.Module):
         weights = self.weights(cached=True)
         if weights['weight_ho'] is None:
             return hx
-        return torch.mm(hx, weights['weight_ho'].t())
+        return F.linear(hx, weights['weight_ho'], weights['bias_ho'])
 
 
 class leakyRNNCellBase(RNNCellBase):
@@ -150,7 +151,7 @@ class rateRNNCellBase(leakyRNNCellBase):
         weights = self.weights(cached=True)
         if weights['weight_ho'] is None:
             return hx
-        return torch.mm(hx, weights['weight_ho'].t())
+        return F.linear(hx, weights['weight_ho'], weights['bias_ho'])
 
 
 class RNNBase(nn.Module):
@@ -166,10 +167,7 @@ class RNNBase(nn.Module):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
-        if trainable_h0:
-            self.h0 = nn.Parameter(torch.empty((self.hidden_size,), **factory_kwargs))
-        else:
-            self.register_parameter('h0', None)
+        self.init_initial_state(trainable_h0, **factory_kwargs)
 
     def reset_parameters(self):
         """Set model weights"""
@@ -181,6 +179,12 @@ class RNNBase(nn.Module):
                 a=-1.0 / math.sqrt(self.hidden_size), 
                 b=1.0 / math.sqrt(self.hidden_size), 
             )
+        
+    def init_initial_state(self, trainable: bool, device=None, dtype=None):
+        if trainable:
+            self.h0 = nn.Parameter(torch.empty((self.hidden_size,), device=device, dtype=dtype))
+        else:
+            self.register_parameter('h0', None)
 
     def build_initial_state(self, batch_size, device=None, dtype=None):
         """Return B x H initial state tensor"""

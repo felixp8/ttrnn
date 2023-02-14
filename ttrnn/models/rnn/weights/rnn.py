@@ -25,8 +25,9 @@ class RNNWeights(WeightsBase):
         weight_config = {
             'weight_ih': (hidden_size, input_size),
             'weight_hh': (hidden_size, hidden_size),
-            'bias': (hidden_size,) if bias else None,
+            'bias_hh': (hidden_size,) if bias else None,
             'weight_ho': (output_size, hidden_size) if (output_size is not None) else None,
+            'bias_ho': (output_size,) if (output_size is not None) else None,
         }
         if init_config is None:
             uniform_kwargs = {
@@ -38,6 +39,7 @@ class RNNWeights(WeightsBase):
                 'weight_hh': ('uniform_', uniform_kwargs),
                 'bias': ('uniform_', uniform_kwargs),
                 'weight_ho': ('uniform_', uniform_kwargs),
+                'bias_ho': ('uniform_', uniform_kwargs),
             }
         super(RNNWeights, self).__init__(
             weight_config=weight_config,
@@ -53,8 +55,11 @@ class RNNWeights(WeightsBase):
     def get_weight_hh(self, cached: bool = False) -> torch.Tensor:
         return self.get('weight_hh', cached=cached)
     
-    def get_bias(self, cached: bool = False) -> torch.Tensor:
-        return self.get('bias', cached=cached)
+    def get_bias_hh(self, cached: bool = False) -> torch.Tensor:
+        return self.get('bias_hh', cached=cached)
 
     def get_weight_ho(self, cached: bool = False) -> torch.Tensor:
         return self.get('weight_ho', cached=cached)
+
+    def get_bias_ho(self, cached: bool = False) -> torch.Tensor:
+        return self.get('bias_ho', cached=cached)

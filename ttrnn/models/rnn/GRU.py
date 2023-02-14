@@ -56,6 +56,14 @@ class GRUCell(RNNCellBase):
     def bias_hh(self):
         return self.weights.get_bias_hh(cached=True)
     
+    @property
+    def weight_ho(self):
+        return self.weights.get_weight_ho(cached=True)
+    
+    @property
+    def bias_ho(self):
+        return self.weights.get_bias_ho(cached=True)
+    
     def forward(self, input: torch.Tensor, hx: Optional[torch.Tensor] = None) -> torch.Tensor:
         weights = self.weights(cached=True)
         ## Below copied from torch
@@ -88,7 +96,7 @@ class GRU(RNNBase):
                      'batch_first', 'bidirectional', 'h0']
 
     def __init__(self, input_size, hidden_size, output_size=None, bias=True, 
-                 trainable_h0=True, batch_first=False, init_config={}, device=None, dtype=None):
+                 trainable_h0=True, batch_first=True, init_config={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
         rnn_cell = GRUCell(
             input_size=input_size, 

@@ -70,6 +70,14 @@ class rateGRUCell(rateRNNCellBase):
     def bias_hh(self):
         return self.weights.get_bias_hh(cached=True)
     
+    @property
+    def weight_ho(self):
+        return self.weights.get_weight_ho(cached=True)
+    
+    @property
+    def bias_ho(self):
+        return self.weights.get_bias_ho(cached=True)
+    
     def forward(self, input, hx):
         weights = self.weights(cached=True)
         weight_ih = weights['weight_ih']
@@ -96,8 +104,8 @@ class rateGRU(RNNBase):
     __constants__ = ['input_size', 'hidden_size', 'output_size', 'nonlinearity', 'bias',
                      'batch_first', 'bidirectional', 'h0']
 
-    def __init__(self, input_size, hidden_size, output_size, bias=True, nonlinearity='relu',
-                 dt=10, tau=50, trainable_h0=True, batch_first=False,
+    def __init__(self, input_size, hidden_size, output_size=None, bias=True, nonlinearity='relu',
+                 dt=10, tau=50, trainable_h0=True, batch_first=True,
                  init_config={}, noise_config={}, trainable_tau=False, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
         rnn_cell = rateGRUCell(
