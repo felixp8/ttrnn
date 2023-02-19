@@ -20,11 +20,11 @@ class RNNCellBase(nn.Module):
         self.weights.reset_parameters()
         self.weights(cached=False)
     
-    def forward(self, input, hx):
+    def forward(self, input, hx, cached: bool = False):
         raise NotImplementedError
     
-    def output(self, hx: torch.Tensor) -> torch.Tensor:
-        weights = self.weights(cached=True)
+    def output(self, hx: torch.Tensor, cached: bool = False) -> torch.Tensor:
+        weights = self.weights(cached=cached)
         if weights['weight_ho'] is None:
             return hx
         return F.linear(hx, weights['weight_ho'], weights['bias_ho'])
@@ -77,11 +77,13 @@ class leakyRNNCellBase(RNNCellBase):
     @property
     def alpha(self):
         if not self.trainable_tau:
+            if self.tau.device != self.alpha_cached.device: # why?
+                self.alpha_cached = self.alpha_cached.to(self.tau.device)
             return self.alpha_cached
         tau_rect = torch.where(
             self.tau > self.tau_min, 
             self.tau, 
-            torch.full(self.tau.shape, self.tau_min)
+            torch.full(self.tau.shape, self.tau_min, device=self.tau.device),
         )
         return self.dt / tau_rect
     
@@ -145,10 +147,10 @@ class rateRNNCellBase(leakyRNNCellBase):
         self.rate_readout = rate_readout
         self.hfn = None
 
-    def output(self, hx: torch.Tensor) -> torch.Tensor:
+    def output(self, hx: torch.Tensor, cached: bool = False) -> torch.Tensor:
         if self.rate_readout:
             hx = self.hfn(hx)
-        weights = self.weights(cached=True)
+        weights = self.weights(cached=cached)
         if weights['weight_ho'] is None:
             return hx
         return F.linear(hx, weights['weight_ho'], weights['bias_ho'])
@@ -158,7 +160,7 @@ class RNNBase(nn.Module):
     """Base RNN class"""
     __constants__ = ['input_size', 'hidden_size', 'output_size', 'batch_first']
     
-    def __init__(self, rnn_cell, input_size, hidden_size, output_size, batch_first=True, 
+    def __init__(self, rnn_cell, input_size, hidden_size, output_size=None, batch_first=True, 
                  trainable_h0=False, device=None, dtype=None):
         super(RNNBase, self).__init__()
         factory_kwargs = {'device': device, 'dtype': dtype}
@@ -196,9 +198,7 @@ class RNNBase(nn.Module):
     
     def forward(self, input, hx=None):
         """Run RNN on sequence of inputs"""
-        if hasattr(self.rnn_cell, 'weights') and \
-            isinstance(getattr(self.rnn_cell, 'weights'), WeightsBase):
-            self.rnn_cell.weights(cached=False)
+        self.update_cache()
         device, dtype = input.device, input.dtype
         if self.batch_first:
             batch_size, seq_len, input_size = input.shape
@@ -216,17 +216,17 @@ class RNNBase(nn.Module):
         hs = []
         os = []
         for i in range(len(inputs)):
-            o, hx = self.forward_step(inputs[i], hx)
+            o, hx = self.forward_step(inputs[i], hx, cached=True)
             hs += [hx]
             os += [o]
         hs = self.concat_states(hs)
         os = torch.stack(os, dim=(1 if self.batch_first else 0))
         return os, hs
     
-    def forward_step(self, input, hx):
+    def forward_step(self, input, hx, cached: bool = False):
         """Run RNN for single timestep"""
-        hx = self.rnn_cell(input, hx)
-        o = self.rnn_cell.output(hx)
+        hx = self.rnn_cell(input, hx, cached=cached)
+        o = self.rnn_cell.output(hx, cached=cached)
         return o, hx
 
     def concat_states(self, hs):
@@ -238,6 +238,11 @@ class RNNBase(nn.Module):
         else:
             hs = torch.stack(hs, dim=(1 if self.batch_first else 0))
         return hs
+
+    def update_cache(self):
+        if hasattr(self.rnn_cell, 'weights') and \
+            isinstance(getattr(self.rnn_cell, 'weights'), WeightsBase):
+            self.rnn_cell.weights(cached=False)
     
     # def output(self, hx):
     #     """Compute output from current state"""

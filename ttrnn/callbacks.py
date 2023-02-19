@@ -10,7 +10,7 @@ from PIL import Image
 from scipy.linalg import LinAlgWarning
 from sklearn.decomposition import PCA
 import gym
-from .trainer import SupervisedRNN
+from .trainer import Supervised, A2C
 
 plt.switch_backend("Agg")
 
@@ -248,7 +248,7 @@ class TaskPerformance(pl.Callback):
     """Computes task success rate
     """
 
-    def __init__(self, split='val', threshold=0.0, burn_in=5, log_every_n_epochs=100):
+    def __init__(self, split='val', threshold=0.0, burn_in=5, log_every_n_epochs=100, n_test_trials=50):
         """Initializes the callback.
 
         Parameters
@@ -262,6 +262,7 @@ class TaskPerformance(pl.Callback):
         self.burn_in = burn_in # samples to ignore at the beginning
         # self.include_abort = include_abort # include aborted trials in success rate
         self.log_every_n_epochs = log_every_n_epochs
+        self.n_test_trials = n_test_trials
 
     def on_validation_epoch_end(self, trainer, pl_module):
         """Logs success rate at the end of the validation epoch.
@@ -276,6 +277,13 @@ class TaskPerformance(pl.Callback):
         # Skip evaluation for most epochs to save time
         if (trainer.current_epoch % self.log_every_n_epochs) != 0:
             return
+        if isinstance(pl_module, Supervised):
+            success_rate, mean_reward = self.supervised_success_rate(trainer, pl_module)
+        elif isinstance(pl_module, A2C):
+            success_rate, mean_reward = self.rl_success_rate(trainer, pl_module)
+        print(success_rate, mean_reward)
+    
+    def supervised_success_rate(self, trainer, pl_module):
         # Get the validation dataloaders
         if self.split == 'train':
             dataloader = trainer.train_dataloaders
@@ -297,19 +305,17 @@ class TaskPerformance(pl.Callback):
             task_targets.append(target)
         model_outputs = torch.cat(model_outputs).detach().cpu().numpy()
         task_targets = torch.cat(task_targets).detach().cpu().numpy()
-        if isinstance(pl_module, SupervisedRNN):
-            # should possibly be readout dependent - softmax vs. linear.
-            # these, however, should also be tied to loss func ... I think
-            loss_func_name = pl_module.hparams.get('loss_func', 'mse_loss')
-            if loss_func_name == 'mse_loss':
-                success_rate, mean_reward = self._mse_loss_success_rate(model_outputs, task_targets, dataloader.dataset)
-            elif loss_func_name == 'cross_entropy':
-                success_rate, mean_reward = self._cross_entropy_success_rate(model_outputs, task_targets, dataloader.dataset)
-        else:
-            return
+        # should possibly be readout dependent - softmax vs. linear.
+        # these, however, should also be tied to loss func ... I think
+        loss_func_name = pl_module.hparams.get('loss_func', 'mse_loss')
+        if loss_func_name == 'mse_loss':
+            success_rate, mean_reward = self._mse_loss_success_rate(model_outputs, task_targets, dataloader.dataset)
+        elif loss_func_name == 'cross_entropy':
+            success_rate, mean_reward = self._cross_entropy_success_rate(model_outputs, task_targets, dataloader.dataset)
         # pl_module.log(f"{self.split}/success_rate", success_rate)
         # pl_module.log(f"{self.split}/mean_reward", mean_reward)
-        print(success_rate, mean_reward)
+        # print(success_rate, mean_reward)
+        return success_rate, mean_reward
         
     def _mse_loss_success_rate(self, model_outputs, task_targets, dataset):
         """Needs cleanup.
@@ -378,6 +384,7 @@ class TaskPerformance(pl.Callback):
         # success[success > 0] = 1.
         success_rate = np.mean(success) if len(success) > 0 else -0.1
         mean_reward = np.mean(rewards) if len(rewards) > 0 else -0.1
+        # import pdb; pdb.set_trace()
         return success_rate, mean_reward
 
     def _cross_entropy_success_rate(self, model_outputs, task_targets, dataset):
@@ -434,3 +441,35 @@ class TaskPerformance(pl.Callback):
         success_rate = np.mean(success) if len(success) > 0 else -0.1
         mean_reward = np.mean(rewards) if len(rewards) > 0 else -0.1
         return success_rate, mean_reward
+
+    def rl_success_rate(self, trainer, pl_module):
+        env = pl_module.env
+        with torch.no_grad():
+            success = []
+            rewards = []
+            for _ in range(self.n_test_trials):
+                obs = env.reset()
+                hx = pl_module.model.rnn.build_initial_state(1, pl_module.device, torch.float)
+                n_steps = 0
+                trial_rewards = []
+                while True:
+                    action_logits, _, hx = pl_module.model(
+                        torch.from_numpy(obs).to(pl_module.device).unsqueeze(0), hx=hx)
+                    action = action_logits.sample().item()
+                    # action = action_logits.probs.argmax().item()
+                    obs, reward, done, info = env.step(action)
+                    trial_rewards.append(reward)
+                    if done or info['new_trial']:
+                        success.append(info.get('performance', 0.0))
+                        rewards.append(np.sum(trial_rewards))
+                        break
+                    n_steps += 1
+                    if n_steps > 500: # timeout
+                        import pdb; pdb.set_trace()
+                        success.append(0)
+                        rewards.append(0)
+                        break
+        success_rate = np.mean(success) if len(success) > 0 else -0.1
+        mean_reward = np.mean(rewards) if len(rewards) > 0 else -0.1
+        return success_rate, mean_reward
+        

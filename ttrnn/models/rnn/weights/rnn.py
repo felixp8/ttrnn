@@ -15,7 +15,7 @@ class RNNWeights(WeightsBase):
         hidden_size: int, 
         output_size: Optional[int] = None,
         bias: bool = True, 
-        init_config: Optional[dict] = None, 
+        init_config: dict = {}, 
         trainable_config: dict = {},
         connectivity: ConnectivityBase = ConnectivityStack(), 
         device=None, 
@@ -29,7 +29,7 @@ class RNNWeights(WeightsBase):
             'weight_ho': (output_size, hidden_size) if (output_size is not None) else None,
             'bias_ho': (output_size,) if (output_size is not None) else None,
         }
-        if init_config is None:
+        if not init_config:
             uniform_kwargs = {
                 'a': -1.0 / math.sqrt(hidden_size), 
                 'b': 1.0 / math.sqrt(hidden_size)

@@ -1,27 +1,28 @@
 import torch
 import pytorch_lightning as pl
 # import neurogym as ngym
-from ttrnn.trainer import SupervisedRNN
-from ttrnn.dataset import NeurogymTaskDataset, NeurogymDataLoader
+from ttrnn.trainer import Supervised
+from ttrnn.dataset import NeurogymTrialEnvDataset, NeurogymDataLoader
 from ttrnn.tasks.driscoll2022 import Driscoll2022, MemoryPro
 from ttrnn.tasks.wrappers import DiscreteToBoxWrapper, RingToBoxWrapper
 from ttrnn.callbacks import TaskPerformance, TrajectoryPlot, TaskPlot
 
 rnn_params = {
-    'input_size': 5, 
-    'hidden_size': 128, 
+    'input_size': 3, 
+    'hidden_size': 32, 
     'output_size': 3, 
     'nonlinearity': 'relu',
-    'bias': True, 
-    'learnable_h0': False,
+    'bias': False, 
+    'trainable_h0': False,
     'batch_first': True,
-    # 'init_config': {'init_func': 'normal_', 'kwargs': {'mean': 0.0, 'std': 1 / (64 ** 0.5)}},
-    'output_kwargs': {'type': 'linear', 'activation': 'none'},
-    'noise_kwargs': {'use_noise': True, 'noise_type': 'normal', 'noise_params': {'mean': 0.0, 'std': 0.05}}
+    # 'init_config': {
+    #     'default': ('normal_', {'mean': 0.0, 'std': 1 / (32 ** 0.5)}),
+    # },
+    # 'noise_config': {'use_noise': True, 'noise_type': 'normal', 'noise_params': {'mean': 0.0, 'std': 0.05}}
 }
 
-model = SupervisedRNN(
-    rnn_type='leakyRNN',
+model = Supervised(
+    rnn_type='RNN',
     rnn_params=rnn_params,
     optim_type='Adam',
     optim_params={'lr': 1e-3, 'weight_decay': 1e-6},
@@ -30,20 +31,20 @@ model = SupervisedRNN(
 
 # import pdb; pdb.set_trace()
 
-# task = 'PerceptualDecisionMaking-v0'
-task = MemoryPro()
-env_kwargs = {} # {'dt': 50, 'timing': {'fixation': 100, 'stimulus': 2000, 'delay': 0, 'decision': 400}}
-wrappers = [(RingToBoxWrapper, {})] # [(DiscreteToBoxWrapper, {})]
+task = 'PerceptualDecisionMaking-v0'
+# task = MemoryPro()
+env_kwargs = {'dt': 50, 'timing': {'fixation': 100, 'stimulus': 2000, 'delay': 0, 'decision': 400}}
+wrappers = [(DiscreteToBoxWrapper, {})] # [(RingToBoxWrapper, {})]
 
 train_dataloader = NeurogymDataLoader(
-    NeurogymTaskDataset(task, env_kwargs, wrappers=wrappers, num_trials=640, seq_len=200, batch_first=True, save_envs=False), 
+    NeurogymTrialEnvDataset(task, env_kwargs, wrappers=wrappers, num_trials=640, seq_len=200, batch_first=True, save_envs=False), 
     static=False,
     batch_size=64, 
     shuffle=True, 
 )
 
 val_dataloader = NeurogymDataLoader(
-    NeurogymTaskDataset(task, env_kwargs, wrappers=wrappers, num_trials=128, seq_len=200, batch_first=True, save_envs=True), 
+    NeurogymTrialEnvDataset(task, env_kwargs, wrappers=wrappers, num_trials=128, seq_len=200, batch_first=True, save_envs=True), 
     static=True,
     batch_size=64, 
     shuffle=False, 
@@ -60,7 +61,7 @@ callbacks = [
 ]
 
 trainer = pl.Trainer(
-    max_epochs=50,
+    max_epochs=100,
     callbacks=callbacks,
     accelerator='gpu',
     devices=1,
@@ -76,36 +77,36 @@ trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val
 
 # import pdb; pdb.set_trace()
 
-import matplotlib.pyplot as plt
-from ttrnn.analysis.fixed_points.fixed_point_finder import FixedPointFinder
-from ttrnn.analysis.fixed_points.plot_utils import plot_fps
+# import matplotlib.pyplot as plt
+# from ttrnn.analysis.fixed_points.fixed_point_finder import FixedPointFinder
+# from ttrnn.analysis.fixed_points.plot_utils import plot_fps
 
-fpf = FixedPointFinder(model.model.rnn_cell, device=model.device)
+# fpf = FixedPointFinder(model.model.rnn.rnn_cell, device=model.device)
 
-dataloader = trainer.val_dataloaders
-dataloader = dataloader[0]
-dataloader.freeze()
-model_states = []
-model_inputs = []
-for batch in dataloader:
-    # Move data to the right device
-    inputs, target = batch
-    inputs = inputs.to(model.device)
-    # Perform the forward pass through the model
-    outputs, hs = model(inputs)
-    model_states.append(hs)
-    model_inputs.append(inputs)
-model_states = torch.cat(model_states).detach()
-model_inputs = torch.cat(model_inputs).detach()
+# dataloader = trainer.val_dataloaders
+# dataloader = dataloader[0]
+# dataloader.freeze()
+# model_states = []
+# model_inputs = []
+# for batch in dataloader:
+#     # Move data to the right device
+#     inputs, target = batch
+#     inputs = inputs.to(model.device)
+#     # Perform the forward pass through the model
+#     outputs, hs = model(inputs)
+#     model_states.append(hs)
+#     model_inputs.append(inputs)
+# model_states = torch.cat(model_states).detach()
+# model_inputs = torch.cat(model_inputs).detach()
 
-inputs, initial_states = fpf.sample_inputs_and_states(model_inputs, model_states, n_inits=40)
-unique_fps, _ = fpf.find_fixed_points(initial_states, inputs)
+# inputs, initial_states = fpf.sample_inputs_and_states(model_inputs, model_states, n_inits=40)
+# unique_fps, _ = fpf.find_fixed_points(initial_states, inputs)
 
-fig = plt.figure()
-plot_fps(unique_fps, 
-    state_traj=model_states,
-    fig=fig
-    )
-plt.savefig('fps.png')
+# fig = plt.figure()
+# plot_fps(unique_fps, 
+#     state_traj=model_states,
+#     fig=fig
+#     )
+# plt.savefig('fps.png')
 
-import pdb; pdb.set_trace()
+# import pdb; pdb.set_trace()

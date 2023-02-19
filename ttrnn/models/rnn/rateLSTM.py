@@ -65,30 +65,30 @@ class rateLSTMCell(rateRNNCellBase):
 
     @property
     def weight_ih(self):
-        return self.weights.get_weight_ih(cached=True)
+        return self.weights.get_weight_ih(cached=False)
     
     @property
     def weight_hh(self):
-        return self.weights.get_weight_hh(cached=True)
+        return self.weights.get_weight_hh(cached=False)
     
     @property
     def bias_hh(self):
-        return self.weights.get_bias_hh(cached=True)
+        return self.weights.get_bias_hh(cached=False)
     
     @property
     def weight_hr(self):
-        return self.weights.get_weight_hr(cached=True)
+        return self.weights.get_weight_hr(cached=False)
     
     @property
     def weight_ho(self):
-        return self.weights.get_weight_ho(cached=True)
+        return self.weights.get_weight_ho(cached=False)
 
     @property
     def bias_ho(self):
-        return self.weights.get_bias_ho(cached=True)
+        return self.weights.get_bias_ho(cached=False)
     
-    def forward(self, input, hx):
-        weights = self.weights(cached=True)
+    def forward(self, input, hx, cached: bool = False):
+        weights = self.weights(cached=cached)
         weight_ih = weights['weight_ih']
         weight_hh = weights['weight_hh']
         bias = weights['bias']
@@ -109,9 +109,9 @@ class rateLSTMCell(rateRNNCellBase):
             hy = torch.mm(hy, weights['weight_hr'].t())
         return (hy, cy)
     
-    def output(self, hx: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+    def output(self, hx: Tuple[torch.Tensor, torch.Tensor], cached: bool = False) -> torch.Tensor:
         h = hx[0]
-        return super(rateLSTMCell, self).output(h)
+        return super(rateLSTMCell, self).output(h, cached=cached)
 
 
 class rateLSTM(RNNBase):

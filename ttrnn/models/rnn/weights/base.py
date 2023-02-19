@@ -40,12 +40,18 @@ class WeightsBase(nn.Module):
     
     def reset_parameters(self) -> None:
         for weight_name in self.weight_names:
-            init_func, init_kwargs = self.init_config.get(
-                weight_name, 
+            if getattr(self, weight_name) is None:
+                continue
+            default_init = self.init_config.get(
+                'default', 
                 ('uniform_', {
                     'a': -1.0 / math.sqrt(getattr(self, weight_name).shape[0]),
                     'b': 1.0 / math.sqrt(getattr(self, weight_name).shape[0]),
                 })
+            )
+            init_func, init_kwargs = self.init_config.get(
+                weight_name, 
+                default_init,
             )
             init_func = getattr(nn.init, init_func)
             init_func(getattr(self, weight_name), **init_kwargs)
@@ -65,7 +71,8 @@ class WeightsBase(nn.Module):
         if cached:
             if self.cache: # check if all weights in cache?
                 return self.cache
-        weights = dict(self.named_parameters())
+        # weights = dict(self.named_parameters())
+        weights = {name: getattr(self, name) for name in self.weight_names}
         weights = self.connectivity(**weights)
         self.cache = weights
         return weights

@@ -25,7 +25,7 @@ class leakyRNNCell(leakyRNNCellBase):
             tau=tau, 
             bias=bias,
             trainable_tau=trainable_tau,
-            noise_config=noise_config
+            noise_config=noise_config,
             **factory_kwargs
         )
         self.nonlinearity = nonlinearity
@@ -51,26 +51,26 @@ class leakyRNNCell(leakyRNNCellBase):
     
     @property
     def weight_ih(self):
-        return self.weights.get_weight_ih(cached=True)
+        return self.weights.get_weight_ih(cached=False)
     
     @property
     def weight_hh(self):
-        return self.weights.get_weight_hh(cached=True)
+        return self.weights.get_weight_hh(cached=False)
     
     @property
     def bias_hh(self):
-        return self.weights.get_bias_hh(cached=True)
+        return self.weights.get_bias_hh(cached=False)
 
     @property
     def weight_ho(self):
-        return self.weights.get_weight_ho(cached=True)
+        return self.weights.get_weight_ho(cached=False)
     
     @property
     def bias_ho(self):
-        return self.weights.get_bias_ho(cached=True)
+        return self.weights.get_bias_ho(cached=False)
     
-    def forward(self, input, hx):
-        weights = self.weights(cached=True)
+    def forward(self, input, hx, cached: bool = False):
+        weights = self.weights(cached=cached)
         weight_ih = weights['weight_ih']
         weight_hh = weights['weight_hh']
         bias = weights['bias_hh']

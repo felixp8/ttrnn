@@ -40,26 +40,26 @@ class RNNCell(RNNCellBase):
     
     @property
     def weight_ih(self):
-        return self.weights.get_weight_ih(cached=True)
+        return self.weights.get_weight_ih(cached=False)
     
     @property
     def weight_hh(self):
-        return self.weights.get_weight_hh(cached=True)
+        return self.weights.get_weight_hh(cached=False)
     
     @property
     def bias_hh(self):
-        return self.weights.get_bias_hh(cached=True)
+        return self.weights.get_bias_hh(cached=False)
         
     @property
     def weight_ho(self):
-        return self.weights.get_weight_ho(cached=True)
+        return self.weights.get_weight_ho(cached=False)
     
     @property
     def bias_ho(self):
-        return self.weights.get_bias_ho(cached=True)
+        return self.weights.get_bias_ho(cached=False)
     
-    def forward(self, input: torch.Tensor, hx: Optional[torch.Tensor] = None) -> torch.Tensor:
-        weights = self.weights(cached=True)
+    def forward(self, input: torch.Tensor, hx: Optional[torch.Tensor] = None, cached: bool = False) -> torch.Tensor:
+        weights = self.weights(cached=cached)
         ## Below copied from torch
         assert input.dim() in (1, 2), \
             f"RNNCell: Expected input to be 1-D or 2-D but received {input.dim()}-D tensor"
@@ -79,6 +79,7 @@ class RNNCell(RNNCellBase):
                 weights['bias_hh'], None,
             )
         elif self.nonlinearity == "relu":
+            # import pdb; pdb.set_trace()
             ret = _VF.rnn_relu_cell(
                 input, hx,
                 weights['weight_ih'], weights['weight_hh'],
@@ -99,8 +100,8 @@ class RNN(RNNBase):
     __constants__ = ['input_size', 'hidden_size', 'output_size', 'nonlinearity', 'bias',
                      'batch_first', 'bidirectional', 'h0']
 
-    def __init__(self, input_size, hidden_size, output_size, bias=True, nonlinearity='relu', 
-                 trainable_h0=False, batch_first=True, device=None, dtype=None):
+    def __init__(self, input_size, hidden_size, output_size=None, bias=True, nonlinearity='relu', 
+                 trainable_h0=False, batch_first=True, init_config={}, device=None, dtype=None):
         factory_kwargs = {'device': device, 'dtype': dtype}
         rnn_cell = RNNCell(
             input_size=input_size, 
@@ -108,6 +109,7 @@ class RNN(RNNBase):
             output_size=output_size,
             bias=bias, 
             nonlinearity=nonlinearity, 
+            init_config=init_config,
             **factory_kwargs
         )
         # readout = self.configure_output(**output_kwargs)

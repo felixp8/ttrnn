@@ -15,7 +15,7 @@ class lrRNNWeights(WeightsBase):
         hidden_size: int, 
         rank: int,
         bias: bool = True, 
-        init_config: Optional[dict] = None, 
+        init_config: dict = {}, 
         trainable_config: dict = {},
         connectivity: ConnectivityBase = ConnectivityStack(), 
         device=None, 
@@ -28,7 +28,7 @@ class lrRNNWeights(WeightsBase):
             'weight_hh_n': (hidden_size, rank),
             'bias': (hidden_size,) if bias else None,
         }
-        if init_config is None:
+        if not init_config:
             # uniform_kwargs = {
             #     'a': -1.0 / math.sqrt(hidden_size), 
             #     'b': 1.0 / math.sqrt(hidden_size)

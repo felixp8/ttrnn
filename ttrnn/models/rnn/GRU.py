@@ -42,30 +42,30 @@ class GRUCell(RNNCellBase):
 
     @property
     def weight_ih(self):
-        return self.weights.get_weight_ih(cached=True)
+        return self.weights.get_weight_ih(cached=False)
     
     @property
     def weight_hh(self):
-        return self.weights.get_weight_hh(cached=True)
+        return self.weights.get_weight_hh(cached=False)
     
     @property
     def bias_ih(self):
-        return self.weights.get_bias_ih(cached=True)
+        return self.weights.get_bias_ih(cached=False)
         
     @property
     def bias_hh(self):
-        return self.weights.get_bias_hh(cached=True)
+        return self.weights.get_bias_hh(cached=False)
     
     @property
     def weight_ho(self):
-        return self.weights.get_weight_ho(cached=True)
+        return self.weights.get_weight_ho(cached=False)
     
     @property
     def bias_ho(self):
-        return self.weights.get_bias_ho(cached=True)
+        return self.weights.get_bias_ho(cached=False)
     
-    def forward(self, input: torch.Tensor, hx: Optional[torch.Tensor] = None) -> torch.Tensor:
-        weights = self.weights(cached=True)
+    def forward(self, input: torch.Tensor, hx: Optional[torch.Tensor] = None, cached: bool = False) -> torch.Tensor:
+        weights = self.weights(cached=cached)
         ## Below copied from torch
         assert input.dim() in (1, 2), \
             f"GRUCell: Expected input to be 1-D or 2-D but received {input.dim()}-D tensor"

@@ -26,10 +26,15 @@ class DiscreteToBoxWrapper(ngym.TrialWrapper):
 
     def step(self, action):
         if isinstance(action, np.ndarray):
-            action = np.argmax(action)
-            if action != 0 and np.max(action[1:]) < self.threshold:
-                action = 0
-        return self.env.step(action)
+            action_sel = np.argmax(action)
+            if action_sel != 0 and np.max(action[1:]) < self.threshold:
+                action_sel = 0
+        else:
+            try:
+                action_sel = int(round(action))
+            except:
+                raise ValueError()
+        return self.env.step(action_sel)
 
 class RingToBoxWrapper(ngym.TrialWrapper):
     def __init__(self, env, threshold=0.0):

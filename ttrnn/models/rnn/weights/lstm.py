@@ -16,7 +16,7 @@ class LSTMWeights(WeightsBase):
         proj_size: Optional[int] = None,
         output_size: Optional[int] = None,
         bias: bool = True, 
-        init_config: Optional[dict] = None, 
+        init_config: dict = None, 
         trainable_config: dict = {},
         connectivity: ConnectivityBase = ConnectivityStack(), 
         device=None, 
@@ -32,7 +32,7 @@ class LSTMWeights(WeightsBase):
             'weight_ho': (output_size, real_hidden_size) if (output_size is not None) else None,
             'bias_ho': (output_size,) if (output_size is not None) else None,
         }
-        if init_config is None:
+        if not init_config:
             uniform_kwargs = {
                 'a': -1.0 / math.sqrt(hidden_size), 
                 'b': 1.0 / math.sqrt(hidden_size)

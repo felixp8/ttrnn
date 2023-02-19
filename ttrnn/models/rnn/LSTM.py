@@ -50,30 +50,30 @@ class LSTMCell(RNNCellBase):
 
     @property
     def weight_ih(self):
-        return self.weights.get_weight_ih(cached=True)
+        return self.weights.get_weight_ih(cached=False)
     
     @property
     def weight_hh(self):
-        return self.weights.get_weight_hh(cached=True)
+        return self.weights.get_weight_hh(cached=False)
     
     @property
     def bias_hh(self):
-        return self.weights.get_bias_hh(cached=True)
+        return self.weights.get_bias_hh(cached=False)
     
     @property
     def weight_hr(self):
-        return self.weights.get_weight_hr(cached=True)
+        return self.weights.get_weight_hr(cached=False)
     
     @property
     def weight_ho(self):
-        return self.weights.get_weight_ho(cached=True)
+        return self.weights.get_weight_ho(cached=False)
 
     @property
     def bias_ho(self):
-        return self.weights.get_bias_ho(cached=True)
+        return self.weights.get_bias_ho(cached=False)
     
-    def forward(self, input: torch.Tensor, hx: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
-        weights = self.weights(cached=True)
+    def forward(self, input: torch.Tensor, hx: Optional[Tuple[torch.Tensor, torch.Tensor]] = None, cached: bool = False) -> torch.Tensor:
+        weights = self.weights(cached=cached)
         assert input.dim() in (1, 2), \
             f"LSTMCell: Expected input to be 1-D or 2-D but received {input.dim()}-D tensor"
         is_batched = input.dim() == 2
@@ -87,7 +87,7 @@ class LSTMCell(RNNCellBase):
             hx = (hx[0].unsqueeze(0), hx[1].unsqueeze(0)) if not is_batched else hx
 
         # TODO: support other nonlinearities
-        if self.use_proj:
+        if not self.use_proj:
             ret = _VF.lstm_cell(
                 input, hx,
                 weights['weight_ih'], weights['weight_hh'],
@@ -117,9 +117,9 @@ class LSTMCell(RNNCellBase):
             ret = (ret[0].squeeze(0), ret[1].squeeze(0))
         return ret
     
-    def output(self, hx: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+    def output(self, hx: Tuple[torch.Tensor, torch.Tensor], cached: bool = False) -> torch.Tensor:
         h = hx[0]
-        return super(LSTMCell, self).output(h)
+        return super(LSTMCell, self).output(h, cached=cached)
 
 
 class LSTM(RNNBase):

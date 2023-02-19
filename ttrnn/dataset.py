@@ -24,13 +24,14 @@ def to_torch_dtype(np_dtype):
         print(f"WARNING: No matching PyTorch dtype found for dtype {np.dtype(np_dtype)}")
     return th_dtype
 
-class NeurogymTaskDataset(Dataset):
+class NeurogymTrialEnvDataset(Dataset):
     def __init__(self, env, env_kwargs={}, wrappers=[], num_trials=400, seq_len=1000, batch_first=False, save_envs=False, seed=None):
         if isinstance(env, gym.Env):
             self.env = copy.deepcopy(env)
         else:
             assert isinstance(env, str), 'env must be gym.Env or str'
             self.env = gym.make(env, **env_kwargs)
+        assert isinstance(self.env.unwrapped, ngym.TrialEnv), 'env must be ngym.TrialEnv'
         if len(wrappers) > 0:
             for wrapper, wrapper_kwargs in wrappers:
                 self.env = wrapper(self.env, **wrapper_kwargs)
