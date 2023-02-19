@@ -7,9 +7,11 @@ from ttrnn.tasks.driscoll2022 import Driscoll2022, MemoryPro
 from ttrnn.tasks.wrappers import DiscreteToBoxWrapper, RingToBoxWrapper
 from ttrnn.callbacks import TaskPerformance, TrajectoryPlot, TaskPlot
 
+pl.seed_everything(0)
+
 rnn_params = {
     'input_size': 3,
-    'hidden_size': 64, 
+    'hidden_size': 256, 
     # 'output_size': 3, 
     # 'nonlinearity': 'relu',
     'bias': False, 
@@ -28,7 +30,7 @@ task = 'PerceptualDecisionMaking-v0'
 #     dt=20,
 #     timing={'fixation': 200, 'stimulus': 1000, 'delay': 1000, 'decision': 400},
 # )
-env_kwargs = {'dt': 50, 'timing': {'fixation': 300, 'stimulus': 500, 'delay': 0, 'decision': 300}}
+env_kwargs = {'dt': 100, 'timing': {'fixation': 300, 'stimulus': 500, 'delay': 0, 'decision': 300}}
 wrappers = [] # [(RingToBoxWrapper, {})] # [(DiscreteToBoxWrapper, {})]
 
 loggers = [
@@ -44,15 +46,14 @@ callbacks = [
 model = A2C(
     env=task,
     env_kwargs=env_kwargs,
-    rnn_type='RNN',
+    rnn_type='LSTM',
     rnn_params=rnn_params,
     optim_type='RMSprop',
     optim_params={'lr': 7e-4}, #, 'weight_decay': 1e-6},
-    max_batch_len=50,
-    max_batch_episodes=10,
-    unroll_len=100,
+    epoch_len=50,
+    reset_state_per_episode=False,
+    # trials_per_episode=10,
 )
-
 
 trainer = pl.Trainer(
     max_epochs=2000,
@@ -65,7 +66,7 @@ trainer = pl.Trainer(
     enable_model_summary=True,
     enable_checkpointing=False,
     logger=loggers,
-    # gradient_clip_val=0.5,
+    gradient_clip_val=0.5,
 )
 
 trainer.fit(model=model) # , train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)

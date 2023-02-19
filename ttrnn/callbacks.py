@@ -447,9 +447,10 @@ class TaskPerformance(pl.Callback):
         with torch.no_grad():
             success = []
             rewards = []
+            hx = pl_module.model.rnn.build_initial_state(1, pl_module.device, torch.float)
             for _ in range(self.n_test_trials):
                 obs = env.reset()
-                hx = pl_module.model.rnn.build_initial_state(1, pl_module.device, torch.float)
+                # hx = pl_module.model.rnn.build_initial_state(1, pl_module.device, torch.float)
                 n_steps = 0
                 trial_rewards = []
                 while True:

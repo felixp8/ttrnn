@@ -5,6 +5,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import pytorch_lightning as pl
 import gym
+import neurogym as ngym
 import copy
 import numpy as np
 
@@ -27,14 +28,14 @@ class A2C(pl.LightningModule):
         critic_type='linear',
         optim_type='SGD', 
         optim_params={}, 
-        max_batch_len=250,
-        max_batch_episodes=1,
-        unroll_len=100,
+        epoch_len: int = 100,
         discount: float = 0.99,
         gae_lambda: float = 1.0,
         avg_reward_len: int = 100,
         entropy_beta: float = 0.01,
         critic_beta: float = 0.25,
+        reset_state_per_episode: bool = True,
+        trials_per_episode: int = 10,
         **kwargs: Any,
     ):
         super(A2C, self).__init__()
@@ -43,6 +44,7 @@ class A2C(pl.LightningModule):
         else:
             assert isinstance(env, str), 'env must be gym.Env or str'
             self.env = gym.make(env, **env_kwargs)
+        self.trial_env = isinstance(self.env.unwrapped, ngym.TrialEnv)
         self.save_hyperparameters()
         self.build_model()
 
@@ -51,10 +53,11 @@ class A2C(pl.LightningModule):
 
         # Tracking metrics
         self.total_rewards = [0]
-        # self.episode_reward = 0
+        self.episode_reward = 0
         self.done_episodes = 0
         self.avg_rewards = 0.0
         self.avg_reward_len = avg_reward_len
+        self.episode_trial_count = 0
         # self.eps = np.finfo(np.float32).eps.item()
         # self.batch_states: List = []
         # self.batch_values: List = []
@@ -63,7 +66,8 @@ class A2C(pl.LightningModule):
         # self.batch_rewards: List = []
         # self.batch_masks: List = []
 
-        # self.state = self.env.reset()
+        self.obs = self.env.reset()
+        self.state = self.model.rnn.build_initial_state(1, self.device, self.dtype)
 
     def build_model(self):
         rnn_type = self.hparams.get('rnn_type', 'RNN')
@@ -101,7 +105,7 @@ class A2C(pl.LightningModule):
             critic=critic,
         )
 
-    def forward(self, X: torch.Tensor, hx: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, X: torch.Tensor, hx: Optional[torch.Tensor] = None, cached: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Passes in a state x through the network and gets the log prob of each action and the value for the state
         as an output.
         Args:
@@ -109,13 +113,40 @@ class A2C(pl.LightningModule):
         Returns:
             action log probabilities, values
         """
-        action_logits, values, hx = self.model(X, hx)
+        action_logits, values, hx = self.model(X, hx, cached=cached)
         return action_logits, values, hx
+    
+    def agent_observe(self, cached: bool = False):
+        action_logits, value, hx = self.forward(
+            torch.from_numpy(self.obs).to(self.device).unsqueeze(0), 
+            hx=self.state, 
+            cached=cached)
+        return action_logits, value, hx
+
+    def agent_act(self, action_logits):
+        action = action_logits.sample()
+        logprob = action_logits.log_prob(action)
+        action = action.detach().cpu().numpy()
+        next_obs, reward, done, info = self.env.step(action)
+
+        return action, logprob, next_obs, reward, done, info
+
+    def agent_step(self, cached: bool = False):
+        assert self.state is not None, \
+            "Please set RNN initial state before calling `agent_step()`"
+        
+        action_logits, value, hx = self.agent_observe(cached=cached)
+        action, logprob, next_obs, reward, done, info = self.agent_act(action_logits)
+        entropy = action_logits.entropy()
+
+        self.state = hx # TODO: keep this here?
+
+        return next_obs, action, reward, value, logprob, entropy, done, info
 
     def compute_returns(
         self,
         rewards: List[float],
-        values: List[float],
+        values: List[torch.Tensor],
         dones: List[bool],
         last_value: float,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -151,12 +182,7 @@ class A2C(pl.LightningModule):
             actions: a list of list of int
             returns: a torch tensor
         """
-        episode_count = 0
-        episode_reward = 0
-        episode_start = 0
-        hx = self.model.rnn.build_initial_state(1, self.device, self.dtype)
-        self.model.rnn.rnn_cell.weights()
-        obs = self.env.reset()
+        self.model.rnn.update_cache()
         
         batch_rewards = []
         batch_action_probs = []
@@ -165,67 +191,65 @@ class A2C(pl.LightningModule):
         batch_dones = []
         batch_advantages = []
         batch_returns = []
-        batch_states = []
-        batch_actions = []
+        # batch_states = []
+        # batch_actions = []
 
-        for step in range(self.hparams.max_batch_len):
-            if (step != episode_start) and ((step - episode_start) % self.hparams.unroll_len == 0):
-                hx = hx.clone().detach() # stop gradients ??
+        for step in range(self.hparams.epoch_len):
 
-            action_logits, values, hx = self.model(
-                torch.from_numpy(obs).to(self.device).unsqueeze(0), hx=hx)
-            action = action_logits.sample()
-            action_prob = action_logits.log_prob(action)
-            # action = action.detach().cpu().numpy()
+            out = self.agent_step(cached=True)
+            next_obs, action, reward, value, logprob, entropy, done, info = out
 
-            obs, reward, done, info = self.env.step(action.detach().cpu().numpy())
+            if self.trial_env and info.get('new_trial', False):
+                self.episode_trial_count += 1
 
-            trial_end = info.get('new_trial', False)
-            done = done or trial_end
+            done = done or (self.episode_trial_count == self.hparams.trials_per_episode)
 
             batch_rewards.append(reward)
-            batch_action_probs.append(action_prob)
-            batch_values.append(values)
-            batch_entropies.append(action_logits.entropy())
-            batch_actions.append(action.detach().cpu().numpy()) # remove
-            batch_states.append(obs) # remove
+            batch_action_probs.append(logprob)
+            batch_values.append(value)
+            batch_entropies.append(entropy)
             batch_dones.append(done)
-            episode_reward += reward
+            # batch_actions.append(action.detach().cpu().numpy()) # remove
+            # batch_states.append(obs)
+            
+            self.episode_reward += reward
+            self.obs = next_obs
 
-            batch_end = (step == self.hparams.max_batch_len - 1)
-
-            if done or batch_end:
-                episode_count += 1
+            if done:
+                # prematurely stop batch if done reached
+                # not really required though
                 self.done_episodes += 1
-                self.total_rewards.append(episode_reward)
+                self.total_rewards.append(self.episode_reward)
                 self.avg_rewards = float(np.mean(self.total_rewards[-self.avg_reward_len :]))
+                self.done = done
 
-                if done:
-                    last_value = 0
-                else:
-                    last_value = self.forward(torch.from_numpy(obs).to(self.device).unsqueeze(0), hx=hx)[1].item()
-                advantages, returns = self.compute_returns(
-                    rewards=batch_rewards[episode_start:], 
-                    values=batch_values[episode_start:], 
-                    dones=batch_dones[episode_start:],
-                    last_value=last_value,
-                )
-                batch_advantages.append(advantages)
-                batch_returns.append(returns)
+                self.episode_trial_count = 0
+                self.episode_reward = 0
+                # break
 
-                if episode_count >= self.hparams.max_batch_episodes:
-                    break
-                
-                obs = self.env.reset()
-                hx = self.model.rnn.build_initial_state(1, self.device, self.dtype)
-                episode_reward = 0
-                episode_start = step + 1
-                # break        
+                # self.obs = self.env.reset()
+                if self.hparams.reset_state_per_episode:
+                    self.state = self.model.rnn.build_initial_state(1, self.device, self.dtype)
 
-        batch_advantages = torch.cat(batch_advantages, dim=0).squeeze()
-        batch_action_probs = torch.cat(batch_action_probs, dim=0).squeeze()
+        if isinstance(self.state, tuple):
+            self.state = tuple([s.detach() for s in self.state])
+        else:
+            self.state = self.state.detach() # stop gradients per batch
+
+        if done:
+            last_value = 0
+        else:
+            with torch.no_grad():
+                last_value = self.agent_observe(cached=True)[1].item()
+        batch_advantages, batch_returns = self.compute_returns(
+            rewards=batch_rewards, 
+            values=batch_values, 
+            dones=batch_dones,
+            last_value=last_value,
+        )
+
         batch_values = torch.cat(batch_values, dim=0).squeeze()
-        batch_returns = torch.cat(batch_returns, dim=0).squeeze()
+        batch_action_probs = torch.cat(batch_action_probs, dim=0).squeeze()
         batch_entropies = torch.cat(batch_entropies, dim=0).squeeze()
 
         # import pdb; pdb.set_trace()
@@ -259,10 +283,10 @@ class A2C(pl.LightningModule):
         # total loss (weighted sum)
         total_loss = actor_loss + critic_loss - entropy
 
-        # self.log('train/actor_loss', (-actor_loss).item())
+        # self.log('train/actor_loss', actor_loss.item())
         # self.log('train/critic_loss', critic_loss.item())
         # self.log('train/entropy_loss', entropy.item())
-        return total_loss
+        return total_loss, (actor_loss, critic_loss, entropy)
 
     def training_step(self, batch, batch_idx):
         """Perform one actor-critic update using a batch of data.
@@ -271,16 +295,19 @@ class A2C(pl.LightningModule):
         """
         advantages, action_probs, values, returns, entropies = self.inner_loop()
         
-        loss = self.loss(advantages, action_probs, values, returns, entropies)
+        loss, (al, cl, ent) = self.loss(advantages, action_probs, values, returns, entropies)
 
         self.log('train/episodes', float(self.done_episodes))
         self.log('train/reward', float(self.total_rewards[-1]))
         self.log('train/avg_reward_100', self.avg_rewards)
+        self.log('train/actor_loss', al.item())
+        self.log('train/critic_loss', cl.item())
+        self.log('train/entropy', ent.item())
         self.log('train/loss', loss.item())
         return loss
     
     def configure_optimizers(self):
-        optim_type = self.hparams.get('optim_type', 'SGD')
+        optim_type = self.hparams.get('optim_type', 'RMSprop')
         optim_params = self.hparams.get('optim_params', {})
         # optimizer = self.get_optimizer(optim_type, optim_params)
         if (optim_type.lower() == 'sgd'):
