@@ -1,4 +1,5 @@
 import numpy as np
+import copy
 
 import gym
 import neurogym as ngym
@@ -228,3 +229,67 @@ class RingToBoxWrapper(ngym.TrialWrapper):
             raise ValueError
         
         return self.env.step(match_idx)
+
+class ParallelEnvs(gym.Wrapper): # idk what I'm doing
+    def __init__(self, env, num_envs):
+        super().__init__(env)
+        self.num_envs = num_envs
+        self.env_list = [self.env] + [copy.deepcopy(self.env) for _ in range(self.num_envs - 1)]
+    
+    def sync_envs(self):
+        self.env_list = [self.env] + [copy.deepcopy(self.env) for _ in range(self.num_envs - 1)]
+    
+    def reset(self, **kwargs):
+        obs, infos = zip(*[env.reset(**kwargs) for env in self.env_list])
+        obs = np.stack(obs)
+        infos = self.build_info(infos)
+        return obs, infos
+
+    def single_reset(self, idx=0, **kwargs):
+        return self.env_list[idx].reset(**kwargs)
+
+    def build_info(self, info_list):
+        type_defaults = {
+            float: np.nan,
+            bool: False,
+            int: 0,
+        }
+        # dtype_dict = {}
+        info_stacked = {}
+        for i, info in enumerate(info_list):
+            for key, val in info.items():
+                if key in info_stacked:
+                    # assert isinstance(val, dtype_dict[key])
+                    pass
+                else:
+                    # dtype_dict[key] = type(val)
+                    info_stacked[key] = np.full(
+                        self.num_envs, 
+                        type_defaults.get(type(val), 0), 
+                        dtype=type(val))
+                info_stacked[key][i] = val
+        return info_stacked
+
+    def step(self, action):
+        assert action.shape[0] == self.num_envs
+        obs_list = []
+        reward_list = []
+        done_list = []
+        trunc_list = []
+        info_list = []
+
+        for i in range(action.shape[0]):
+            ob, reward, done, trunc, info = self.env_list[i].step(action[i])
+
+            obs_list.append(ob)
+            reward_list.append(reward)
+            done_list.append(done)
+            trunc_list.append(trunc)
+            info_list.append(info)
+
+        obs = np.stack(obs_list) # N x O
+        rewards = np.stack(reward_list) # N
+        dones = np.stack(done_list)
+        truncs = np.stack(trunc_list)
+        infos = self.build_info(info_list)
+        return obs, rewards, dones, truncs, infos

@@ -82,9 +82,9 @@ class leakyGRUCell(leakyRNNCellBase):
             rznu = torch.mm(input, weight_ih.t()) + bias_ih
         rh, zh, nh = rznh.chunk(3, 1)
         ru, zu, nu = rznu.chunk(3, 1)
-        r = F.sigmoid(rh + ru)
-        z = F.sigmoid(zh + zu)
-        n = F.tanh(r * nh + nu + self.sample_noise(device, dtype))
+        r = torch.sigmoid(rh + ru)
+        z = torch.sigmoid(zh + zu)
+        n = torch.tanh(r * nh + nu + self.sample_noise(device, dtype))
         hx = hx * (1 - self.alpha * z) + n * self.alpha * z
         return hx
 

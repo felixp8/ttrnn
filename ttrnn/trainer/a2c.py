@@ -14,6 +14,35 @@ from typing import Optional, List, Tuple, Any
 from .. import models
 from ..models.actorcritic import ActorCritic, LinearCategoricalActor, \
     LinearGaussianActor, MLPCategoricalActor, MLPGaussianActor
+from ..tasks.wrappers import ParallelEnvs
+
+
+class PartialMLPEncoder(nn.Module):
+    def __init__(
+        self,
+        obs_dim,
+        act_dim,
+        reward_dim,
+        hidden_dim,
+        output_dim,
+    ):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(obs_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim),
+            nn.ReLU(),
+        )
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+        self.reward_dim = reward_dim
+
+    def forward(self, X):
+        assert X.shape[-1] == (self.obs_dim + self.act_dim + self.reward_dim)
+        obs = X[..., :self.obs_dim]
+        enc = self.mlp(obs)
+        out = torch.cat([enc, X[..., self.obs_dim:]], dim=-1)
+        return out
 
 
 class A2C(pl.LightningModule):
@@ -26,16 +55,19 @@ class A2C(pl.LightningModule):
         rnn_params={}, 
         actor_type='linear',
         critic_type='linear',
+        encoder_type='none',
         optim_type='SGD', 
         optim_params={}, 
         epoch_len: int = 100,
-        discount: float = 0.99,
+        discount_gamma: float = 0.99,
         gae_lambda: float = 1.0,
         avg_reward_len: int = 100,
         entropy_beta: float = 0.01,
         critic_beta: float = 0.25,
         reset_state_per_episode: bool = True,
-        trials_per_episode: int = 10,
+        trials_per_episode: int = -1,
+        max_episode_len: int = -1,
+        entropy_anneal_len: int = -1,
         **kwargs: Any,
     ):
         super(A2C, self).__init__()
@@ -45,19 +77,33 @@ class A2C(pl.LightningModule):
             assert isinstance(env, str), 'env must be gym.Env or str'
             self.env = gym.make(env, **env_kwargs)
         self.trial_env = isinstance(self.env.unwrapped, ngym.TrialEnv)
+        if hasattr(self.env, 'num_envs'):
+            self.num_envs = self.env.num_envs
+        else:
+            self.env = ParallelEnvs(self.env, num_envs=1) # TODO: use Gym VectorEnvs
+            self.num_envs = self.env.num_envs 
         self.save_hyperparameters()
         self.build_model()
 
         # Hyperparameters
         # self.batches_per_epoch = batch_size * epoch_len
+        self.entropy_weight = 1.0
 
         # Tracking metrics
-        self.total_rewards = [0]
-        self.episode_reward = 0
-        self.done_episodes = 0
-        self.avg_rewards = 0.0
+        self.total_rewards = [[0]] * self.num_envs
+        self.episode_reward = np.zeros(self.num_envs, dtype=float)
+        self.done_episodes = np.zeros(self.num_envs, dtype=int)
+        self.avg_rewards = np.zeros(self.num_envs, dtype=float)
         self.avg_reward_len = avg_reward_len
-        self.episode_trial_count = 0
+        self.episode_trial_count = np.zeros(self.num_envs, dtype=int)
+        self.episode_len = np.zeros(self.num_envs, dtype=int)
+        self.avg_episode_len = np.zeros(self.num_envs, dtype=float)
+        if trials_per_episode > 1:
+            self.episode_trial_rewards = np.zeros((self.num_envs, trials_per_episode))
+            self.avg_episode_trial_rewards = np.zeros((self.num_envs, trials_per_episode))
+        else:
+            self.episode_trial_rewards = None
+            self.avg_episode_trial_rewards = None
         # self.eps = np.finfo(np.float32).eps.item()
         # self.batch_states: List = []
         # self.batch_values: List = []
@@ -66,13 +112,37 @@ class A2C(pl.LightningModule):
         # self.batch_rewards: List = []
         # self.batch_masks: List = []
 
-        self.obs = self.env.reset()
-        self.state = self.model.rnn.build_initial_state(1, self.device, self.dtype)
+        self.episode_states = []
+
+        self.obs, _ = self.env.reset()
+        # if len(self.obs.shape) == 1:
+        #     self.obs = self.obs[None, :]
+        self.state = self.model.rnn.build_initial_state(self.num_envs, self.device, self.dtype)
 
     def build_model(self):
+        input_size = self.env.observation_space.shape[0]
+
+        encoder_type = self.hparams.get('encoder_type', 'none')
+        if encoder_type.lower() == 'none': # TODO: add more flexibility
+            encoder = None
+            rnn_input_size = input_size
+        elif encoder_type.lower() == 'linear':
+            encoder = nn.Linear(input_size, 64)
+            rnn_input_size = 64
+        elif encoder_type.lower() == 'mlp':
+            encoder = PartialMLPEncoder(
+                obs_dim=input_size - self.env.action_space.n - 1,
+                act_dim=self.env.action_space.n,
+                reward_dim=1,
+                hidden_dim=64,
+                output_dim=128
+            )
+            rnn_input_size = 128 + 1 + self.env.action_space.n
         rnn_type = self.hparams.get('rnn_type', 'RNN')
         rnn_params = self.hparams.get('rnn_params', {})
-        assert rnn_params['input_size'] == self.env.observation_space.shape[0]
+        if rnn_params['input_size'] != rnn_input_size:
+            print("Warning: overriding RNN input size")
+            rnn_params['input_size'] = rnn_input_size
         if hasattr(models.rnn, rnn_type):
             rnn = getattr(models.rnn, rnn_type)(**rnn_params)
         else:
@@ -99,10 +169,12 @@ class A2C(pl.LightningModule):
         critic_type = self.hparams.get('critic_type', 'linear')
         if critic_type == 'linear':
             critic = nn.Linear(rnn_out_size, 1)
+
         self.model = ActorCritic(
             rnn=rnn,
             actor=actor,
             critic=critic,
+            encoder=encoder,
         )
 
     def forward(self, X: torch.Tensor, hx: Optional[torch.Tensor] = None, cached: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -118,7 +190,7 @@ class A2C(pl.LightningModule):
     
     def agent_observe(self, cached: bool = False):
         action_logits, value, hx = self.forward(
-            torch.from_numpy(self.obs).to(self.device).unsqueeze(0), 
+            torch.from_numpy(self.obs).to(device=self.device, dtype=self.dtype), 
             hx=self.state, 
             cached=cached)
         return action_logits, value, hx
@@ -127,21 +199,24 @@ class A2C(pl.LightningModule):
         action = action_logits.sample()
         logprob = action_logits.log_prob(action)
         action = action.detach().cpu().numpy()
-        next_obs, reward, done, info = self.env.step(action)
 
-        return action, logprob, next_obs, reward, done, info
+        next_obs, reward, done, trunc, info = self.env.step(action)
+        # if len(next_obs.shape) == 1:
+        #     next_obs = next_obs[None, :]
+
+        return action, logprob, next_obs, reward, done, trunc, info
 
     def agent_step(self, cached: bool = False):
         assert self.state is not None, \
             "Please set RNN initial state before calling `agent_step()`"
         
         action_logits, value, hx = self.agent_observe(cached=cached)
-        action, logprob, next_obs, reward, done, info = self.agent_act(action_logits)
+        action, logprob, next_obs, reward, done, trunc, info = self.agent_act(action_logits)
         entropy = action_logits.entropy()
 
         self.state = hx # TODO: keep this here?
 
-        return next_obs, action, reward, value, logprob, entropy, done, info
+        return next_obs, action, reward, value, logprob, entropy, done, trunc, info
 
     def compute_returns(
         self,
@@ -158,16 +233,18 @@ class A2C(pl.LightningModule):
         Returns:
             tensor of discounted rewards
         """
-        advantages = torch.zeros(len(rewards), dtype=torch.float, device=self.device)
-        returns = torch.zeros(len(rewards), dtype=torch.float, device=self.device)
-
-        advantages[-1] = rewards[-1] + self.hparams.discount * last_value * (1 - dones[-1]) - values[-1].item()
-        returns[-1] = rewards[-1] + self.hparams.discount * last_value * (1 - dones[-1])
-        for t in reversed(range(len(rewards) - 1)):
-            delta = rewards[t] + self.hparams.discount * values[t + 1].item() * (1 - dones[t]) - values[t].item()
-            advantages[t] = delta + self.hparams.discount * self.hparams.gae_lambda * (1 - dones[t]) * advantages[t + 1]
-            # returns[t] = rewards[t] + self.hparams.discount * returns[t + 1]
-            returns[t] = advantages[t] + values[t].item()
+        advantages = torch.zeros((self.num_envs, len(rewards)), dtype=torch.float, device=self.device)
+        returns = torch.zeros((self.num_envs, len(rewards)), dtype=torch.float, device=self.device)
+        
+        with torch.no_grad():
+            tfn = lambda x: torch.as_tensor(x).to(self.device).to(self.dtype)
+            advantages[:, -1] = tfn(rewards[-1]) + self.hparams.discount_gamma * last_value.squeeze() * (1 - tfn(dones[-1])) - values[-1].squeeze()
+            returns[:, -1] = tfn(rewards[-1]) + self.hparams.discount_gamma * last_value.squeeze() * (1 - tfn(dones[-1]))
+            for t in reversed(range(len(rewards) - 1)):
+                delta = tfn(rewards[t]) + self.hparams.discount_gamma * values[t + 1].squeeze() * (1 - tfn(dones[t])) - values[t].squeeze()
+                advantages[:, t] = delta + self.hparams.discount_gamma * self.hparams.gae_lambda * (1 - tfn(dones[t])) * advantages[:, t + 1]
+                # returns[t] = rewards[t] + self.hparams.discount_gamma * returns[t + 1]
+                returns[:, t] = advantages[:, t] + values[t].squeeze()
 
         return advantages, returns
 
@@ -191,56 +268,91 @@ class A2C(pl.LightningModule):
         batch_dones = []
         batch_advantages = []
         batch_returns = []
-        # batch_states = []
-        # batch_actions = []
+        batch_states = []
+        batch_actions = []
 
         for step in range(self.hparams.epoch_len):
 
             out = self.agent_step(cached=True)
-            next_obs, action, reward, value, logprob, entropy, done, info = out
+            next_obs, action, reward, value, logprob, entropy, done, trunc, info = out
 
-            if self.trial_env and info.get('new_trial', False):
-                self.episode_trial_count += 1
+            if self.trial_env:
+                self.episode_trial_count += info.get('new_trial', np.zeros(self.num_envs, dtype=bool)).astype(int)
+                # truth = np.array([(env.num_tr - 1) for env in self.env.env_list])
+                # if not np.all(np.mod(self.episode_trial_count, self.hparams.trials_per_episode) == truth):
+                #     import pdb; pdb.set_trace()
+            self.episode_len += 1
 
-            done = done or (self.episode_trial_count == self.hparams.trials_per_episode)
+            trial_count_reached = (self.episode_trial_count == self.hparams.trials_per_episode)
+            max_len_reached = (self.episode_len == self.hparams.max_episode_len)
+            episode_done = np.any([done, trunc, trial_count_reached, max_len_reached], axis=0)
 
             batch_rewards.append(reward)
             batch_action_probs.append(logprob)
             batch_values.append(value)
             batch_entropies.append(entropy)
-            batch_dones.append(done)
-            # batch_actions.append(action.detach().cpu().numpy()) # remove
-            # batch_states.append(obs)
+            batch_dones.append(episode_done)
+            batch_actions.append(action) # remove
+            batch_states.append(self.obs)
+
+            # self.episode_states.append(self.obs[0])
+
+            self.obs = next_obs.copy()
             
             self.episode_reward += reward
-            self.obs = next_obs
 
-            if done:
-                # prematurely stop batch if done reached
-                # not really required though
-                self.done_episodes += 1
-                self.total_rewards.append(self.episode_reward)
-                self.avg_rewards = float(np.mean(self.total_rewards[-self.avg_reward_len :]))
-                self.done = done
+            for i in range(self.num_envs):
+                if self.trial_env and info.get('new_trial', np.zeros(self.num_envs, dtype=bool))[i]:
+                    if self.episode_trial_rewards is not None:
+                        self.episode_trial_rewards[i, self.episode_trial_count[i]-1] = \
+                            self.episode_reward[i] - np.sum(self.episode_trial_rewards[i, :self.episode_trial_count[i]-1])
 
-                self.episode_trial_count = 0
-                self.episode_reward = 0
-                # break
+                if episode_done[i]:
+                    self.done_episodes[i] += 1
+                    self.total_rewards[i].append(self.episode_reward[i])
+                    self.avg_rewards[i] = float(np.mean(self.total_rewards[i][-self.avg_reward_len :]))
 
-                # self.obs = self.env.reset()
-                if self.hparams.reset_state_per_episode:
-                    self.state = self.model.rnn.build_initial_state(1, self.device, self.dtype)
+                    self.avg_episode_len[i] = self.avg_episode_len[i] * 0.95 + self.episode_len[i] * 0.05
+
+                    self.episode_trial_count[i] = 0
+                    self.episode_len[i] = 0
+                    self.episode_reward[i] = 0
+
+                    # if i == 0:
+                    #     if self.current_epoch > 100:
+                    #         import pdb; pdb.set_trace()
+                    #     self.episode_states = []
+
+                    if self.episode_trial_rewards is not None:
+                        # exponential moving average
+                        self.avg_episode_trial_rewards[i] = self.avg_episode_trial_rewards[i] * 0.95 \
+                              + 0.05 * self.episode_trial_rewards[i]
+                        self.episode_trial_rewards[i, :] = 0.
+                    # break
+
+                    # self.obs = self.env.reset()
+                    if self.hparams.reset_state_per_episode:
+                        if isinstance(self.state, tuple):
+                            reset_hstate, reset_cstate = self.model.rnn.build_initial_state(1, self.device, self.dtype)
+                            self.state = (
+                                torch.cat([self.state[0][:i,:], reset_hstate, self.state[0][i+1:,:]], dim=0), 
+                                torch.cat([self.state[1][:i,:], reset_cstate, self.state[1][i+1:,:]], dim=0))
+                        else:
+                            reset_state = self.model.rnn.build_initial_state(1, self.device, self.dtype)
+                            self.state = torch.cat([self.state[:i,:], reset_state, self.state[i+1:,:]], dim=0)
 
         if isinstance(self.state, tuple):
             self.state = tuple([s.detach() for s in self.state])
         else:
             self.state = self.state.detach() # stop gradients per batch
 
-        if done:
-            last_value = 0
-        else:
-            with torch.no_grad():
-                last_value = self.agent_observe(cached=True)[1].item()
+        with torch.no_grad():
+            last_value = self.agent_observe(cached=True)[1].detach()
+            last_value = torch.where(
+                torch.as_tensor(episode_done, dtype=torch.bool, device=self.device).unsqueeze(1),
+                torch.zeros((self.num_envs, 1), device=self.device, dtype=self.dtype),
+                last_value)
+
         batch_advantages, batch_returns = self.compute_returns(
             rewards=batch_rewards, 
             values=batch_values, 
@@ -248,11 +360,17 @@ class A2C(pl.LightningModule):
             last_value=last_value,
         )
 
-        batch_values = torch.cat(batch_values, dim=0).squeeze()
-        batch_action_probs = torch.cat(batch_action_probs, dim=0).squeeze()
-        batch_entropies = torch.cat(batch_entropies, dim=0).squeeze()
+        batch_values = torch.cat(batch_values, dim=1)
+        batch_action_probs = torch.stack(batch_action_probs, dim=1)
+        batch_entropies = torch.stack(batch_entropies, dim=1)
 
         # import pdb; pdb.set_trace()
+
+        if self.current_epoch % 250 == 0:
+            # import pdb; pdb.set_trace()
+            if self.avg_episode_trial_rewards is not None:
+                print(self.avg_episode_trial_rewards)
+            # import pdb; pdb.set_trace()
         
         return batch_advantages, batch_action_probs, batch_values, batch_returns, batch_entropies
 
@@ -272,7 +390,7 @@ class A2C(pl.LightningModule):
             returns: tensor of shape (batch_size, )
         """
         # entropy loss
-        entropy = self.hparams.entropy_beta * entropies.mean()
+        entropy = self.hparams.entropy_beta * self.entropy_weight * entropies.mean()
 
         # actor loss
         actor_loss = -(logprobs * advantages).mean()
@@ -297,9 +415,11 @@ class A2C(pl.LightningModule):
         
         loss, (al, cl, ent) = self.loss(advantages, action_probs, values, returns, entropies)
 
-        self.log('train/episodes', float(self.done_episodes))
-        self.log('train/reward', float(self.total_rewards[-1]))
-        self.log('train/avg_reward_100', self.avg_rewards)
+        for i in range(self.num_envs):
+            self.log(f'train/env{i:02d}/episodes', float(self.done_episodes[i]))
+            self.log(f'train/env{i:02d}/reward', float(self.total_rewards[i][-1]))
+            self.log(f'train/env{i:02d}/avg_reward_100', self.avg_rewards[i])
+            self.log(f'train/env{i:02d}/avg_episode_len', float(self.avg_episode_len[i]))
         self.log('train/actor_loss', al.item())
         self.log('train/critic_loss', cl.item())
         self.log('train/entropy', ent.item())
@@ -323,6 +443,10 @@ class A2C(pl.LightningModule):
         return {
             'optimizer': optimizer,
         }
+    
+    def on_train_batch_end(self, batch_end_outputs, batch, batch_idx):
+        if self.hparams.entropy_anneal_len > 0:
+            self.entropy_weight = 1 - min(self.current_epoch / self.hparams.entropy_anneal_len, 1.0)
 
     def train_dataloader(self):
         return DataLoader(dataset=TensorDataset(torch.zeros(1)), batch_size=1)

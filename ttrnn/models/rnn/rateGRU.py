@@ -93,8 +93,8 @@ class rateGRUCell(rateRNNCellBase):
             lznu = torch.mm(input, weight_ih.t()) + bias_ih
         lh, zh, nh = lznh.chunk(3, 1)
         lu, zu, nu = lznu.chunk(3, 1)
-        l = F.sigmoid(lh + lu)
-        z = F.sigmoid(zh + zu)
+        l = torch.sigmoid(lh + lu)
+        z = torch.sigmoid(zh + zu)
         n = l * nh + nu + self.sample_noise()
         hx = hx * (1 - self.alpha * z) + n * self.alpha * z
         return hx

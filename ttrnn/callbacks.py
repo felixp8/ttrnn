@@ -11,6 +11,7 @@ from scipy.linalg import LinAlgWarning
 from sklearn.decomposition import PCA
 import gym
 from .trainer import Supervised, A2C
+from .tasks.wrappers import ParallelEnvs
 
 plt.switch_backend("Agg")
 
@@ -281,6 +282,8 @@ class TaskPerformance(pl.Callback):
             success_rate, mean_reward = self.supervised_success_rate(trainer, pl_module)
         elif isinstance(pl_module, A2C):
             success_rate, mean_reward = self.rl_success_rate(trainer, pl_module)
+            success_rate = round(success_rate, 4)
+            mean_reward = round(mean_reward, 4)
         print(success_rate, mean_reward)
     
     def supervised_success_rate(self, trainer, pl_module):
@@ -363,13 +366,13 @@ class TaskPerformance(pl.Callback):
                     continue
                 env = copy.deepcopy(env)
                 while (env.unwrapped.t_ind < self.burn_in):
-                    ob, reward, done, info = env.step(env.gt_now)
+                    ob, reward, done, trunc, info = env.step(env.gt_now)
                 if done:
                     print('WARNING: trial terminated in burn-in.')
                     # import pdb; pdb.set_trace()
-                while not done and not info['new_trial'] and (env.unwrapped.t_ind < actions.shape[0]):
+                while not done and not trunc and not info['new_trial'] and (env.unwrapped.t_ind < actions.shape[0]):
                     action = actions[env.unwrapped.t_ind]
-                    ob, reward, done, info = env.step(action)
+                    ob, reward, done, trunc, info = env.step(action)
                 # import pdb; pdb.set_trace()
                 performance = info['performance']
                 success.append(performance)
@@ -418,12 +421,12 @@ class TaskPerformance(pl.Callback):
                 #     continue
                 env = copy.deepcopy(env)
                 while (env.unwrapped.t_ind < self.burn_in):
-                    ob, reward, done, info = env.step(env.gt_now)
+                    ob, reward, done, trunc, info = env.step(env.gt_now)
                 if done:
                     print('WARNING: trial terminated in burn-in.')
-                while not done and not info['new_trial'] and (env.unwrapped.t_ind < actions.shape[0]):
+                while not done and not trunc and not info['new_trial'] and (env.unwrapped.t_ind < actions.shape[0]):
                     action = actions[env.unwrapped.t_ind]
-                    ob, reward, done, info = env.step(action)
+                    ob, reward, done, trunc, info = env.step(action)
                     # import pdb; pdb.set_trace()
                 performance = info['performance']
                 success.append(performance)
@@ -443,24 +446,27 @@ class TaskPerformance(pl.Callback):
         return success_rate, mean_reward
 
     def rl_success_rate(self, trainer, pl_module):
-        env = pl_module.env
+        if isinstance(pl_module.env, ParallelEnvs):
+            env = copy.deepcopy(pl_module.env.env_list[0])
+        else:
+            env = copy.deepcopy(pl_module.env)
         with torch.no_grad():
             success = []
             rewards = []
             hx = pl_module.model.rnn.build_initial_state(1, pl_module.device, torch.float)
+            obs, _ = env.reset()
             for _ in range(self.n_test_trials):
-                obs = env.reset()
                 # hx = pl_module.model.rnn.build_initial_state(1, pl_module.device, torch.float)
                 n_steps = 0
                 trial_rewards = []
                 while True:
                     action_logits, _, hx = pl_module.model(
-                        torch.from_numpy(obs).to(pl_module.device).unsqueeze(0), hx=hx)
+                        torch.from_numpy(obs).to(device=pl_module.device, dtype=pl_module.dtype).unsqueeze(0), hx=hx)
                     action = action_logits.sample().item()
                     # action = action_logits.probs.argmax().item()
-                    obs, reward, done, info = env.step(action)
+                    obs, reward, done, trunc, info = env.step(action)
                     trial_rewards.append(reward)
-                    if done or info['new_trial']:
+                    if done or trunc or info['new_trial']:
                         success.append(info.get('performance', 0.0))
                         rewards.append(np.sum(trial_rewards))
                         break
