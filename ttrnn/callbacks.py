@@ -114,7 +114,7 @@ class TrajectoryPlot(pl.Callback):
         states = []
         for batch in dataloader:
             # Move data to the right device
-            inputs, target = batch
+            inputs, target, mask = batch
             inputs = inputs.to(pl_module.device)
             # Perform the forward pass through the model
             outputs, hs = pl_module(inputs)
@@ -280,6 +280,8 @@ class TaskPerformance(pl.Callback):
             return
         if isinstance(pl_module, Supervised):
             success_rate, mean_reward = self.supervised_success_rate(trainer, pl_module)
+            success_rate = round(success_rate, 4)
+            mean_reward = round(mean_reward, 4)
         elif isinstance(pl_module, A2C):
             success_rate, mean_reward = self.rl_success_rate(trainer, pl_module)
             success_rate = round(success_rate, 4)
@@ -300,7 +302,7 @@ class TaskPerformance(pl.Callback):
         task_targets = []
         for batch in dataloader:
             # Move data to the right device
-            inputs, target = batch
+            inputs, target, mask = batch
             inputs = inputs.to(pl_module.device)
             # Perform the forward pass through the model
             outputs, hs = pl_module(inputs)
@@ -308,6 +310,8 @@ class TaskPerformance(pl.Callback):
             task_targets.append(target)
         model_outputs = torch.cat(model_outputs).detach().cpu().numpy()
         task_targets = torch.cat(task_targets).detach().cpu().numpy()
+        # if (trainer.current_epoch > 1948):
+        #     import pdb; pdb.set_trace()
         # should possibly be readout dependent - softmax vs. linear.
         # these, however, should also be tied to loss func ... I think
         loss_func_name = pl_module.hparams.get('loss_func', 'mse_loss')

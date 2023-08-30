@@ -1,3 +1,8 @@
+
+import os
+import shutil
+import pickle
+import copy
 import torch
 import pytorch_lightning as pl
 import neurogym as ngym
@@ -19,7 +24,7 @@ else:
 pl.seed_everything(seed)
 
 rnn_params = {
-    'input_size': 13 + 3 + 1,
+    'input_size': 1 + 11 * 2 + 3 + 1,
     'hidden_size': 256, 
     # 'output_size': 3, 
     # 'nonlinearity': 'relu',
@@ -54,10 +59,11 @@ rnn_params = {
 # )
 task = HarlowMinimalDelay(
     dt=100,
-    obj_dim=5,
+    obj_dim=11,
     obj_mode="kb", 
     obj_init="normal",
-    orthogonalize=True,
+    orthogonalize=False,
+    normalize=True,
     abort=True,
     rewards={'abort': -0.1, 'correct': 1.0, 'fail': 0.0},
     timing={'fixation': 200, 'stimulus': 400, 'delay': 200, 'decision': 200},
@@ -85,27 +91,33 @@ wrappers = [
 ] # [(RingToBoxWrapper, {})] # [(DiscreteToBoxWrapper, {})]
 # wrappers = []
 
+ckpt_dir = "/home/fpei2/learning/harlow-rnn-analysis/runs/harlowdelaynotorth_rnn256/"
+
+overwrite = True
+if overwrite:
+    if os.path.exists(ckpt_dir):
+        shutil.rmtree(ckpt_dir)
+
 loggers = [
-    pl.loggers.CSVLogger(save_dir="csv_logs"),
+    pl.loggers.CSVLogger(save_dir=ckpt_dir),
     # pl.loggers.WandbLogger(project='ttrnn-dev'),
 ]
 callbacks = [
     # TaskPerformance(log_every_n_epochs=250, threshold=0.6),
     # TrajectoryPlot(log_every_n_epochs=5),
     # TaskPlot(log_every_n_epochs=5),
-    ModelCheckpoint(dirpath="/home/fpei2/learning/harlow_analysis/runs/harlowdelay3_gru256/", monitor="train/loss", save_top_k=8, every_n_epochs=2500),
+    ModelCheckpoint(dirpath=ckpt_dir, monitor="train/loss", save_top_k=8, every_n_epochs=2500),
 ]
     
 if len(wrappers) > 0:
     for wrapper, wrapper_kwargs in wrappers:
         task = wrapper(task, **wrapper_kwargs)
-
-# TODO: pickle `task` for later loading
+backup = copy.deepcopy(task)
 
 model = A2C(
     env=task,
     env_kwargs=env_kwargs,
-    rnn_type='leakyGRU',
+    rnn_type='leakyRNN',
     rnn_params=rnn_params,
     actor_type='linear',
     critic_type='linear',
@@ -118,11 +130,11 @@ model = A2C(
     discount_gamma=0.91,
     critic_beta=0.4,
     entropy_beta=0.001,
-    # entropy_anneal_len=10000,
+    entropy_anneal_len=30000,
 )
 
 trainer = pl.Trainer(
-    max_epochs=20000,
+    max_epochs=30000,
     callbacks=callbacks,
     # accelerator='gpu',
     # devices=1,
@@ -136,5 +148,11 @@ trainer = pl.Trainer(
 )
 
 trainer.fit(model=model) # , train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
+
+# TODO: pickle `task` for later loading
+# with open(os.path.join(ckpt_dir, "task.pkl"), 'wb') as f:
+#     backup.obj1_builder = None
+#     backup.obj2_builder = None
+#     pickle.dump(backup, f)
 
 # import pdb; pdb.set_trace()

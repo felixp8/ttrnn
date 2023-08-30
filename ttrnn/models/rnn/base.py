@@ -133,7 +133,7 @@ class rateRNNCellBase(leakyRNNCellBase):
         dtype=None,
     ):
         factory_kwargs = {'device': device, 'dtype': dtype}
-        super(leakyRNNCellBase, self).__init__(
+        super(rateRNNCellBase, self).__init__(
             input_size=input_size,
             hidden_size=hidden_size,
             bias=bias,

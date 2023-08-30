@@ -15,6 +15,7 @@ class HarlowSimple(ngym.TrialEnv):
         obj_mode: Literal["kb", "su", "sr", "sb"] = "kb",
         obj_init: Literal["normal", "uniform", "randint"] = "uniform",
         orthogonalize: bool = True,
+        normalize: bool = True,
         num_trials_before_reset: int = 6,
         r_tmax: int = 0,
     ):
@@ -27,14 +28,17 @@ class HarlowSimple(ngym.TrialEnv):
         self.obj_dim = obj_dim
         self.obj_mode = obj_mode
         self.orthogonalize = orthogonalize
+        self.normalize = normalize
         self.obj_init = obj_init
         self.obj1 = None
         self.obj2 = None
         self.obj_left = None
+        self.obj1_builder = None
+        self.obj2_builder = None
 
     def reset(self, reset_obj=False, **kwargs):
         if reset_obj:
-            self.init_objects()
+            self.init_objects(**kwargs)
         return super().reset(**kwargs)
 
     def new_trial(self, **kwargs):
@@ -58,8 +62,11 @@ class HarlowSimple(ngym.TrialEnv):
             self._has_gt = self._gt_built
         return self.trial
 
-    def init_objects(self):
-        self.reward_idx = self.rng.choice([0, 1])
+    def init_objects(self, **kwargs):
+        if kwargs.get('reward_idx', None) is not None:
+            self.reward_idx = int(kwargs.get('reward_idx'))
+        else:
+            self.reward_idx = self.rng.choice([0, 1])
 
         if self.obj_init == "uniform":
             initializer = lambda: self.rng.uniform(low=-1.0, high=1.0, size=self.obj_dim)
@@ -73,14 +80,28 @@ class HarlowSimple(ngym.TrialEnv):
             orthogonalizer = lambda x, y: (x, y - (np.dot(x,y) / np.dot(x,x)) * x)
         else:
             orthogonalizer = lambda x, y: (x, y)
+        if self.normalize:
+            old_orthogonalizer = orthogonalizer
+            orthogonalizer = lambda x, y: tuple([
+                vec / (np.linalg.norm(vec) + 1e-6) for vec in old_orthogonalizer(x, y)])
 
-        obj1, obj2 = orthogonalizer(initializer(), initializer())
-        n_retries = 0
-        while np.allclose(obj1, obj2) or np.linalg.norm(obj1) < 1e-3 or np.linalg.norm(obj2) < 1e-3:
+        if (kwargs.get('obj1', None) is not None) and (kwargs.get('obj2', None) is not None):
+            obj1 = kwargs.get('obj1')
+            obj2 = kwargs.get('obj2')
+        elif (kwargs.get('obj1', None) is not None):
+            obj1 = kwargs.get('obj1')
+            obj2 = orthogonalizer(obj1, initializer())[1]
+        elif (kwargs.get('obj2', None) is not None):
+            obj2 = kwargs.get('obj2')
+            obj1 = orthogonalizer(initializer(), obj2)[0]
+        else:
             obj1, obj2 = orthogonalizer(initializer(), initializer())
-            n_retries += 1
-            if n_retries > 10:
-                raise AssertionError("Object generation failed")
+            n_retries = 0
+            while np.allclose(obj1, obj2) or np.linalg.norm(obj1) < 1e-3 or np.linalg.norm(obj2) < 1e-3:
+                obj1, obj2 = orthogonalizer(initializer(), initializer())
+                n_retries += 1
+                if n_retries > 10:
+                    raise AssertionError("Object generation failed")
 
         if self.obj_mode == "sb": # switch both
             obj_mode = np.random.choice(["su", "sr", "kb"])
@@ -128,6 +149,7 @@ class HarlowMinimal(HarlowSimple):
         obj_mode: Literal["kb", "su", "sr", "sb"] = "kb",
         obj_init: Literal["normal", "uniform", "randint"] = "uniform",
         orthogonalize: bool = True,
+        normalize: bool = True,
         inter_trial_interval: int = 4, # * dt
         num_trials_before_reset: int = 6,
         r_tmax: int = 0,
@@ -139,6 +161,7 @@ class HarlowMinimal(HarlowSimple):
             obj_mode=obj_mode,
             obj_init=obj_init,
             orthogonalize=orthogonalize,
+            normalize=normalize,
             num_trials_before_reset=num_trials_before_reset, 
             r_tmax=r_tmax,
         )
@@ -171,10 +194,15 @@ class HarlowMinimal(HarlowSimple):
         self.obj1, self.obj2 = self.get_objects()
         self.obj_left = self.rng.choice([0, 1])
         trial = {
+            'obj1': self.obj1,
+            'obj2': self.obj2,
             'reward_idx': self.reward_idx,
             'obj_left': self.obj_left,
+            'obj_mode': self.obj_mode,
+            'trial_num': self.num_tr,
         }
         trial.update(kwargs)
+        self.obj_left = trial.get('obj_left')
 
         return trial
 
@@ -227,6 +255,7 @@ class Harlow1D(HarlowSimple):
         obj_mode: Literal["kb", "su", "sr", "sb"] = "kb",
         obj_init: Literal["normal", "uniform", "randint"] = "randint",
         orthogonalize: bool = True,
+        normalize: bool = True,
         inter_trial_interval: int = 4,
         num_trials_before_reset: int = 6,
         r_tmax: int = 0,
@@ -238,6 +267,7 @@ class Harlow1D(HarlowSimple):
             obj_mode=obj_mode,
             obj_init=obj_init,
             orthogonalize=orthogonalize,
+            normalize=normalize,
             num_trials_before_reset=num_trials_before_reset, 
             r_tmax=r_tmax,
         )
@@ -275,10 +305,15 @@ class Harlow1D(HarlowSimple):
         self.obj1, self.obj2 = self.get_objects()
         self.obj_left = self.rng.choice([0, 1])
         trial = {
+            'obj1': self.obj1,
+            'obj2': self.obj2,
             'reward_idx': self.reward_idx,
             'obj_left': self.obj_left,
+            'obj_mode': self.obj_mode,
+            'trial_num': self.num_tr,
         }
         trial.update(kwargs)
+        self.obj_left = trial.get('obj_left')
 
         self.obs[:] = 0.
         if self.loc == 0 or np.abs(self.loc) > self.obj_dist:
@@ -342,6 +377,7 @@ class HarlowMinimalDelay(HarlowSimple):
         obj_mode: Literal["kb", "su", "sr", "sb"] = "kb",
         obj_init: Literal["normal", "uniform", "randint"] = "uniform",
         orthogonalize: bool = True,
+        normalize: bool = True,
         num_trials_before_reset: int = 6,
         r_tmax: int = 0,
         stim_to_decision: bool = False,
@@ -352,6 +388,7 @@ class HarlowMinimalDelay(HarlowSimple):
             obj_mode=obj_mode,
             obj_init=obj_init,
             orthogonalize=orthogonalize,
+            normalize=normalize,
             num_trials_before_reset=num_trials_before_reset,
             r_tmax=r_tmax,
         )
@@ -386,13 +423,19 @@ class HarlowMinimalDelay(HarlowSimple):
     def _new_trial(self, **kwargs):
         # Trial info
         self.obj1, self.obj2 = self.get_objects()
-        # self.obj_left = self.rng.choice([0, 1])
+        self.obj_left = self.rng.choice([0, 1])
         trial = {
+            'obj1': self.obj1,
+            'obj2': self.obj2,
             'reward_idx': self.reward_idx,
-            'obj_left': self.rng.choice([0, 1]),
+            'obj_left': self.obj_left,
+            'obj_mode': self.obj_mode,
+            'trial_num': self.num_tr,
         }
         trial.update(kwargs)
         self.obj_left = trial.get('obj_left')
+        self.obj1 = trial.get('obj1')
+        self.obj2 = trial.get('obj2')
 
         ground_truth = int(self.reward_idx != self.obj_left)
 
@@ -439,8 +482,9 @@ class HarlowMinimalDelay(HarlowSimple):
                     self.performance = 1
                 else:
                     reward += self.rewards['fail']
+        block_done = (new_trial and (self.num_tr == self.num_tr_exp))
 
-        return self.ob_now, reward, False, {'new_trial': new_trial, 'gt': gt}
+        return self.ob_now, reward, False, {'new_trial': new_trial, 'gt': gt, 'block_done': block_done}
     
 
 class HarlowMinimalRT(HarlowSimple):
@@ -454,6 +498,7 @@ class HarlowMinimalRT(HarlowSimple):
         obj_mode: Literal["kb", "su", "sr", "sb"] = "kb",
         obj_init: Literal["normal", "uniform", "randint"] = "uniform",
         orthogonalize: bool = True,
+        normalize: bool = True,
         num_trials_before_reset: int = 6,
         r_tmax: int = 0,
     ):
@@ -463,6 +508,7 @@ class HarlowMinimalRT(HarlowSimple):
             obj_mode=obj_mode,
             obj_init=obj_init,
             orthogonalize=orthogonalize,
+            normalize=normalize,
             num_trials_before_reset=num_trials_before_reset,
             r_tmax=r_tmax,
         )
@@ -496,10 +542,15 @@ class HarlowMinimalRT(HarlowSimple):
         self.obj1, self.obj2 = self.get_objects()
         self.obj_left = self.rng.choice([0, 1])
         trial = {
+            'obj1': self.obj1,
+            'obj2': self.obj2,
             'reward_idx': self.reward_idx,
             'obj_left': self.obj_left,
+            'obj_mode': self.obj_mode,
+            'trial_num': self.num_tr,
         }
         trial.update(kwargs)
+        self.obj_left = trial.get('obj_left')
 
         ground_truth = int(self.reward_idx != self.obj_left)
 
@@ -540,12 +591,194 @@ class HarlowMinimalRT(HarlowSimple):
         return self.ob_now, reward, False, {'new_trial': new_trial, 'gt': gt}
 
 
+class HarlowMinimalDelaySupervised(HarlowSimple):
+    def __init__(
+        self,
+        dt: int = 100,
+        obj_dim: int = 8, 
+        rewards: Optional[dict] = None,
+        timing: Optional[dict] = None,
+        abort: bool = False,
+        obj_mode: Literal["kb", "su", "sr", "sb"] = "kb",
+        obj_init: Literal["normal", "uniform", "randint"] = "uniform",
+        orthogonalize: bool = True,
+        normalize: bool = True,
+        num_trials_per_block: int = 6,
+        num_trials_before_reset: int = 100000,
+        r_tmax: int = 0,
+    ):
+        super(HarlowMinimalDelaySupervised, self).__init__(
+            dt=dt,
+            obj_dim=obj_dim,
+            obj_mode=obj_mode,
+            obj_init=obj_init,
+            orthogonalize=orthogonalize,
+            normalize=normalize,
+            num_trials_before_reset=num_trials_before_reset,
+            r_tmax=r_tmax,
+        )
+
+        self.rewards = {'abort': -0.1, 'correct': +1., 'fail': 0.}
+        if rewards:
+            self.rewards.update(rewards)
+        
+        base_timing = {
+            'fixation': 200,
+            'stimulus': 500,
+            'delay': 200,
+            'decision': 100,}
+        if timing:
+            base_timing.update(timing)
+        self.timing = {}
+        for i in range(num_trials_per_block):
+            self.timing.update({key + str(i): val for key, val in base_timing.items()})
+
+        self.abort = abort
+        self.num_trials_per_block = num_trials_per_block
+        self.trial_ctr = 0
+
+        name = {'fixation': 0, 'stimulus': range(1, obj_dim*2 + 1), 
+                'action': range(obj_dim*2 + 1, obj_dim*2 + 4), 'reward': obj_dim*2 + 4}
+        self.observation_space = spaces.Box(
+            -np.inf, np.inf, shape=(5+obj_dim*2,), dtype=np.float32, name=name)
+
+        name = {'fixation': 0, 'choice': range(1, 2 + 1)}
+        self.action_space = spaces.Discrete(2+1, name=name)
+        
+        self.last_choice = -1
+        self.last_reward = 0
+
+    def reset(self, action=0, **kwargs):
+        return super().reset(action=action, **kwargs)
+
+    def new_trial(self, **kwargs):
+        """Public interface for starting a new trial.
+
+        Returns:
+            trial: dict of trial information. Available to step function as
+                self.trial
+        """
+        # Reset for next trial
+        self._tmax = 0  # reset, self.tmax not reset so it can be used in step
+        self._ob_built = False
+        self._gt_built = False
+        trial = self._new_trial(**kwargs)
+        self.trial = trial
+        self.num_tr += 1  # Increment trial count
+        self._has_gt = self._gt_built
+        return self.trial
+
+    def _new_trial(self, **kwargs):
+        # Trial info
+        self.init_objects()
+        self.obj1, self.obj2 = self.get_objects()
+        self.obj_left = self.rng.choice([0, 1], size=6)
+        self.first_choice = self.rng.choice([0, 1])
+        trial = {
+            'obj1': self.obj1,
+            'obj2': self.obj2,
+            'reward_idx': self.reward_idx,
+            'obj_left': self.obj_left,
+            'obj_mode': self.obj_mode,
+            'first_choice': self.first_choice,
+        }
+        trial.update(kwargs)
+        self.obj_left = trial.get('obj_left')
+        self.first_choice = trial.get('first_choice')
+        self.trial_ctr = 0
+
+        ground_truth = (self.obj_left != self.reward_idx).astype(int)
+        ground_truth[0] = self.first_choice
+
+        # Periods
+        periods = ['fixation', 'stimulus', 'delay', 'decision']
+        periods = [name + str(i) for i in range(self.num_trials_per_block) for name in periods ]
+        self.add_period(periods)
+
+        last_choice = self.last_choice
+        last_reward = self.last_reward
+        for i in range(self.num_trials_per_block):
+            self.add_ob(1, period=[f'fixation{i}', f'stimulus{i}', f'delay{i}'], where='fixation')
+            stim = np.concatenate([
+                self.obj1 if self.obj_left[i] == 0 else self.obj2,
+                self.obj2 if self.obj_left[i] == 0 else self.obj1,
+            ], axis=0)
+            self.add_ob(stim, f'stimulus{i}', where='stimulus')
+            self.add_ob(np.eye(3)[0], period=[f'fixation{i}', f'stimulus{i}', f'delay{i}', f'decision{i}'], where='action')
+            self.add_ob(0, period=[f'fixation{i}', f'stimulus{i}', f'delay{i}', f'decision{i}'], where='reward')
+
+            ob = self.view_ob(f'fixation{i}')
+            act_range = self.observation_space.name['action']
+            rew_range = self.observation_space.name['reward']
+            ob[0, act_range] = np.eye(3)[last_choice + 1]
+            ob[0, rew_range] = last_reward
+
+            self.set_groundtruth(ground_truth[i], period=f'decision{i}', where='choice')
+
+            last_choice = ground_truth[i]
+            last_reward = int(ground_truth[i] == (self.obj_left[i] != self.reward_idx))
+        
+        self.last_choice = last_choice
+        self.last_reward = last_reward
+
+        return trial
+
+    def in_subtrial_period(self, period):
+        ret = False
+        for key in self.timing.keys():
+            if period in key:
+                ret = ret or self.in_period(key)
+        return ret
+    
+    def get_cur_period(self, period=''):
+        cur_period = None
+        for key in self.timing.keys():
+            if period in key:
+                if self.in_period(key):
+                    cur_period = key
+        return cur_period
+
+    def _step(self, action):
+        new_trial = False
+        # rewards
+        reward = 0
+        gt = self.gt_now
+        # observations
+        if self.in_subtrial_period('fixation'):
+            if action != 0:  # action = 0 means fixating
+                new_trial = self.abort
+                reward += self.rewards['abort']
+        if self.in_subtrial_period('stimulus'):
+            if action != 0:  # action = 0 means fixating
+                new_trial = self.abort
+                reward += self.rewards['abort']
+        if self.in_subtrial_period('delay'):
+            if action != 0:  # action = 0 means fixating
+                new_trial = self.abort
+                reward += self.rewards['abort']
+        elif self.in_subtrial_period('decision'):
+            if action != 0:
+                if self.in_period(f'decision{self.num_trials_per_block - 1}'):
+                    new_trial = True
+                if self.in_period(f'decision{self.trial_ctr}'):
+                    if action == gt:
+                        reward += self.rewards['correct']
+                        if not self.in_period('decision0'):
+                            self.performance += 1 / (self.num_trials_per_block - 1)
+                    else:
+                        reward += self.rewards['fail']
+                    self.trial_ctr += 1
+
+        return self.ob_now, reward, False, {'new_trial': new_trial, 'gt': gt}
+
+
 if __name__ == "__main__":
     # env = Harlow1D(
     #     inter_trial_interval=0,
     # )
     env = HarlowMinimalDelay(
         dt=100,
+        obj_mode="su",
         abort=True,
         obj_dim=5,
     )

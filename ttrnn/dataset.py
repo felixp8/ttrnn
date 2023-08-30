@@ -62,6 +62,7 @@ class NeurogymTrialEnvDataset(Dataset):
         
         self._inputs = torch.empty(self.input_shape, dtype=obs_dtype)
         self._target = torch.empty(self.target_shape, dtype=act_dtype)
+        self._mask = torch.empty(self.target_shape, dtype=torch.bool)
         self.stored_envs = []
         
         self._build_dataset() # to fix: when not static, first build data will never be used
@@ -81,6 +82,7 @@ class NeurogymTrialEnvDataset(Dataset):
                     # expanding action space to Dataset obj
                     env_list.append(copy.deepcopy(env))
                 ob, gt = env.ob, env.gt
+                loss_mask = getattr(env, 'loss_mask', np.ones(gt.shape))
                 if self._expand_action:
                     gt = gt[:, None]
                 seq_len = ob.shape[0]
@@ -91,9 +93,11 @@ class NeurogymTrialEnvDataset(Dataset):
                 if self.batch_first:
                     self._inputs[i, seq_start:seq_end, ...] = torch.from_numpy(ob[:seq_len])
                     self._target[i, seq_start:seq_end, ...] = torch.from_numpy(gt[:seq_len])
+                    self._mask[i, seq_start:seq_end, ...] = torch.from_numpy(loss_mask[:seq_len].astype(bool))
                 else:
                     self._inputs[seq_start:seq_end, i, ...] = torch.from_numpy(ob[:seq_len])
                     self._target[seq_start:seq_end, i, ...] = torch.from_numpy(gt[:seq_len])
+                    self._mask[seq_start:seq_end, i, ...] = torch.from_numpy(loss_mask[:seq_len].astype(bool))
                 seq_start = seq_end
             if self.save_envs:
                 self.stored_envs.append(env_list)
@@ -103,9 +107,9 @@ class NeurogymTrialEnvDataset(Dataset):
     
     def __getitem__(self, idx):
         if self.batch_first:
-            return self._inputs[idx], self._target[idx]
+            return self._inputs[idx], self._target[idx], self._mask[idx]
         else:
-            return self._inputs[:, idx], self._target[:, idx]
+            return self._inputs[:, idx], self._target[:, idx], self._mask[:, idx]
     
 class NeurogymDataLoader(DataLoader):
     def __init__(self, dataset, static=False, **kwargs):

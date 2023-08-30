@@ -37,6 +37,40 @@ class DiscreteToBoxWrapper(ngym.TrialWrapper):
                 raise ValueError()
         return self.env.step(action_sel)
 
+class DiscreteTo1DBoxWrapper(ngym.TrialWrapper):
+    def __init__(self, env, act_map, threshold=0.0):
+        super().__init__(env)
+        assert isinstance(env.action_space, gym.spaces.Discrete), \
+            "Should only be used to wrap Discrete envs."
+        self.act_map = act_map
+        self.values = np.array(list(act_map.values()))
+        self.action_space = gym.spaces.Box(np.min(self.values), np.max(self.values), (1,))
+        self.threshold = threshold # TODO: use this?
+    
+    def set_threshold(self, threshold):
+        self.threshold = threshold
+    
+    def new_trial(self, **kwargs):
+        trial = self.env.new_trial(**kwargs)
+        old_gt = self.unwrapped.gt
+        env_gt = np.zeros((self.unwrapped.gt.shape[0], 1),
+                              dtype=np.float32)
+        env_gt[np.arange(env_gt.shape[0]), old_gt] = 1.
+        self.gt = env_gt
+        return trial
+
+    def step(self, action):
+        if isinstance(action, np.ndarray):
+            action_sel = np.argmax(action)
+            if action_sel != 0 and np.max(action[1:]) < self.threshold:
+                action_sel = 0
+        else:
+            try:
+                action_sel = int(round(action))
+            except:
+                raise ValueError()
+        return self.env.step(action_sel)
+
 class RingToBoxWrapper(ngym.TrialWrapper):
     def __init__(self, env, threshold=0.0):
         super().__init__(env)
@@ -207,6 +241,7 @@ class RingToBoxWrapper(ngym.TrialWrapper):
 
         self.ob = ob
         self.gt = gt
+        return trial
     
     def step(self, action):
         # Action is assumed to be [fixation, cos(theta), sin(theta)]
@@ -229,6 +264,32 @@ class RingToBoxWrapper(ngym.TrialWrapper):
             raise ValueError
         
         return self.env.step(match_idx)
+
+class LossMaskWrapper(gym.Wrapper):
+    def __init__(self, env, mask_config):
+        super().__init__(env)
+        self.mask_mode = mask_config.get('mode', 'firstlast')
+        assert self.mask_mode in ['firstlast', 'last', 'timing']
+        if self.mask_mode == 'timing':
+            self.mask_timing = mask_config.get('mask_timing', {})
+        else:
+            self.mask_timing = {}
+    
+    def new_trial(self, **kwargs):
+        trial = self.env.new_trial(**kwargs)
+        mask = np.zeros_like(self.env.gt)
+        if self.mask_mode == 'firstlast':
+            mask[0, :] = 1.
+            mask[-1, :] = 1.
+        elif self.mask_mode == 'last':
+            mask[-1, :] = 1.
+        else:
+            for period, idxs in self.mask_timing.items():
+                if len(idxs) == 0:
+                    idxs = np.arange(self.end_ind[period] - self.start_ind[period])
+                mask[self.start_ind[period]:self.end_ind[period]][idxs] = 1.
+        self.loss_mask = mask
+        return trial
 
 class ParallelEnvs(gym.Wrapper): # idk what I'm doing
     def __init__(self, env, num_envs):

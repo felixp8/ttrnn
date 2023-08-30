@@ -105,16 +105,16 @@ class Supervised(pl.LightningModule):
         return outputs, hs
     
     def training_step(self, batch, batch_idx):
-        inputs, targets = batch
+        inputs, targets, mask = batch
         outputs, hs = self.forward(inputs)
-        loss = self.loss_func(outputs, targets)
+        loss = self.loss_func(outputs[mask], targets[mask])
         self.log("train/loss", loss)
         return loss
     
     def validation_step(self, batch, batch_idx):
-        inputs, targets = batch
+        inputs, targets, mask = batch
         outputs, hs = self.forward(inputs)
-        loss = self.loss_func(outputs, targets)
+        loss = self.loss_func(outputs[mask], targets[mask])
         self.log("val/loss", loss)
         return loss
 
